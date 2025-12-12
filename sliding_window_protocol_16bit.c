@@ -8,10 +8,30 @@
 // #############################################################################
 
 
-//bool uart_send_byte(uint8_t byte);
-//uint8_t uart_receive_byte(void);
-//bool uart_RX_available(void);
-//uint32_t millis(void);
+// Provide weak, overrideable defaults for platform-specific hooks so the
+// module links even if the application hasn't supplied implementations yet.
+// Real platforms should provide their own (strong) implementations which
+// will override these weak symbols at link time.
+#include <stdint.h>
+#include <stdbool.h>
+
+__attribute__((weak)) bool uart_send_byte(uint8_t byte) {
+    (void)byte;
+    return false;
+}
+
+__attribute__((weak)) uint8_t uart_receive_byte(void) {
+    return 0;
+}
+
+__attribute__((weak)) bool uart_RX_available(void) {
+    return false;
+}
+
+__attribute__((weak)) uint32_t millis(void) {
+    return 0U;
+}
+
 
 // #############################################################################
 // ## Private Variables
@@ -165,6 +185,36 @@ void reliable_receive_buffered_with_encoding(uint8_t *output, volatile uint16_t 
             uint16_t out_len_local = *output_len;
             process_in_order_packets(output, &out_len_local);
             *output_len = out_len_local;
+            
+            // If this packet requests signing, attempt to parse the assembled payload.
+            // If the full assembled payload is available use it; otherwise fall back to the
+            // packet's data buffer. The stardome handler will validate the CBOR format.
+            if (pkt.flags & FLAG_SIGN) {
+                const uint8_t *parse_buf = NULL;
+                uint16_t parse_len = 0;
+                if (*output_len > 0) {
+                    parse_buf = output;
+                    parse_len = *output_len;
+                } else {
+                    parse_buf = pkt.data;
+                    parse_len = pkt.data_length;
+                }
+
+                // Call into the stardome-specific handler; react to failures by
+                // sending a NACK and a small error response payload (raw byte 0x00).
+                // Also update a diagnostic counter so failures are visible.
+                bool ok = handle_flag_sign_packet(parse_buf, parse_len);
+                if (!ok) {
+                    conn_state.sequence_mismatch_drop++; // record parsing failure
+                    // Send protocol-level negative acknowledgement
+                    send_nack();
+
+                    // Send an application-level error response containing the
+                    // raw error code byte 0x00 so the sender can detect the error.
+                    uint8_t err_code = 0x00;
+                    sliding_window_send_payload(&err_code, 1, FLAG_LAST_PACKET, ENCODING_BINARY);
+                }
+            }
 
             if (pkt.flags & FLAG_LAST_PACKET) {
                 done = true;

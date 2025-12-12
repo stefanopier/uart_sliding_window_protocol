@@ -46,14 +46,14 @@
 #define FLAG_LAST_PACKET      0x01
 #define FLAG_SIGN             0x02                  // where the last bit is reserved for last packet = 0x03
 #define FLAG_STARDOME_SIGNATURE 0x04    // where the last bit is reserved for last packet = 0x05
-#define FLAG_STARDOME_TREE    0x06         // where the last bit is reserved for last packet = 0x07
+#define FLAG_STARDOME_TREE    0x26         // where the last bit is reserved for last packet = 0x27
 #define FLAG_STARDOME         0x08              // where the last bit is reserved for last packet = 0x09
 #define FLAG_SN               0x0A                    // where the last bit is reserved for last packet = 0x0B
 #define FLAG_STARDOME_SN      0x0C           // where the last bit is reserved for last packet = 0x0D
 #define FLAG_STATUS           0x0E                // where the last bit is reserved for last packet = 0x0F
 #define FLAG_STARDOME_STATUS  0x10       // where the last bit is reserved for last packet = 0x11
 #define FLAG_CRYPTO           0x12                // where the last bit is reserved for last packet = 0x13
-#define FLAG_STARDOME_CRYPTO  0x14       // where the last bit is reserved for last packet = 0x15
+#define FLAG_STARDOME_CRYPTO  0x34       // where the last bit is reserved for last packet = 0x35
 
 // Byte stuffing / framing characters
 #define FRAME_BYTE      0x7E  // Marks start and end of a frame

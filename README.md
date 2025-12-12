@@ -60,7 +60,7 @@ Important constants in the header:
 
 Flags used in packet `flags` byte (some are project-specific):
 - `FLAG_LAST_PACKET` — last packet of a sequence
-- `FLAG_SIGN` etc. — (examples added in header for `FLAG_STARDOME` / `FLAG_CRYPTO`, etc.)
+- `FLAG_SIGN` etc. — (Stardome project-specific, not included)
 
 ---
 

@@ -69,10 +69,15 @@ python sliding_window_client.py --port /dev/ttyUSB0 --target uno
 python sliding_window_client.py --port /dev/ttyUSB0 --target generic
 
 # Custom board with 256-byte limit and short boot delay
-python sliding_window_client.py --port COM7 --target generic --max-payload 256 --boot-delay 0.2
+python sliding_window_client.py --port COM10 --target generic --max-payload 256 --boot-delay 0.2
 
 # Force flushing buffers regardless of profile
-python sliding_window_client.py --port COM11 --flush-on-connect --max-payload 128
+python sliding_window_client.py --port COM10 --flush-on-connect --max-payload 128
+
+#Test data exchange
+python sliding_window_client.py --port COM10 --baud 115200 --json-file payload.json --target generic
+python sliding_window_client.py --port COM10 --baud 115200 --payload-file payload_1024 --target generic
+python sliding_window_client.py --port COM10 --baud 115200 --payload-file payload_1024 --chunk-size 128 --target generic
 ```
 
 ### Interactive Commands
@@ -89,8 +94,8 @@ Once connected, use these commands:
 ### Example Session (text payload)
 
 ```
-$ python sliding_window_client.py --port COM11 --baud 115200 --json-file payload.json
-✓ Connected to COM11 at 115200 baud
+$ python sliding_window_client.py --port COM10 --baud 115200 --json-file payload.json
+✓ Connected to COM10 at 115200 baud
 → Sent packet seq=0, len=44, frame_bytes=64, preview='{
   "msg": "Lorem ipsum dolo…'
   Waiting for echo response...
@@ -118,8 +123,8 @@ Statistics:
 To exercise the MCU at its maximum payload size (1,024 bytes by default), use the bundled `payload_1024` binary file:
 
 ```
-$ python sliding_window_client.py --port COM8 --baud 115200 --payload-file payload_1024 --target generic
-✓ Connected to COM8 at 115200 baud
+$ python sliding_window_client.py --port COM10 --baud 115200 --payload-file payload_1024 --target generic
+✓ Connected to COM10 at 115200 baud
 Loaded raw payload: 1024 bytes from payload_1024
 → Sent packet seq=0, len=1024, frame_bytes=1040, preview='\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f…'
   Waiting for echo response...
@@ -143,8 +148,8 @@ Statistics:
 When the payload exceeds the configured per-packet limit (or when you supply `--chunk-size`), the client automatically splits data across multiple frames and reassembles the echoed response. Example with two 512-byte chunks:
 
 ```
-$ python sliding_window_client.py --port COM8 --baud 115200 --payload-file payload_1024 --chunk-size 512 --target generic
-✓ Connected to COM8 at 115200 baud
+$ python sliding_window_client.py --port COM10 --baud 115200 --payload-file payload_1024 --chunk-size 512 --target generic
+✓ Connected to COM10 at 115200 baud
 Loaded raw payload: 1024 bytes from payload_1024
 → Sending sequence of 2 packets (1024 bytes total, chunk=512)
 → Sent packet seq=0/2, len=512, frame_bytes=528, preview='\x00\x01\x02\x03\x04\x05\x06\x07…'
@@ -168,8 +173,8 @@ Statistics:
 ```
 ### Debug session
 ```
-$ python sliding_window_client.py --port COM11 --baud 115200 --json-file payload.json --debug
-✓ Connected to COM8 at 115200 baud
+$ python sliding_window_client.py --port COM10 --baud 115200 --json-file payload.json --debug
+✓ Connected to COM10 at 115200 baud
 [DBG RAW TX] 7e01000001002c0000002c00027b0a20202020226d7367223a20224c6f72656d20697073756d20646f6c6f722073697420616d65742c220a7d5dcdab219f7e
 → Sent packet seq=0, len=44, frame_bytes=64, preview='{
     "msg": "Lorem ipsum dolo…'
