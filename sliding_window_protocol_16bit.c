@@ -32,7 +32,6 @@ __attribute__((weak)) uint32_t millis(void) {
     return 0U;
 }
 
-
 // #############################################################################
 // ## Private Variables
 // #############################################################################
@@ -677,6 +676,53 @@ static void prepare_and_send_packet(const uint8_t *data, uint16_t len, uint8_t f
 void sliding_window_send_payload(const uint8_t *data, uint16_t len, uint8_t flags, uint8_t encoding_type) {
     // For a single packet, total_packets = 1 and total_size = len
     prepare_and_send_packet(data, len, flags, 1, len, encoding_type);
+}
+
+// Helper to send large payloads by fragmenting them into multiple packets
+// Blocks until all fragments are queued (and waits for window space if needed)
+void sliding_window_send_fragmented(const uint8_t *data, uint32_t len, uint8_t flags, uint8_t encoding_type) {
+    uint16_t total_packets = (uint16_t)((len + MAX_DATA_SIZE - 1) / MAX_DATA_SIZE);
+    uint32_t offset = 0;
+    
+    for (uint16_t i = 0; i < total_packets; i++) {
+        // Wait for window space: block while the window is full
+        // (next_seq - base_seq) >= WINDOW_SIZE
+        while ( ((next_seq - base_seq + MAX_SEQ_NUM) % MAX_SEQ_NUM) >= WINDOW_SIZE ) {
+             // Poll for ACKs to advance window
+             Packet rx_pkt;
+             FrameType ftype;
+             uint8_t ctrl_data[16];
+             uint8_t ctrl_len = 0;
+             
+             // We must process incoming ACKs to free up window slots
+             if (receive_any_frame(&ftype, &rx_pkt, ctrl_data, &ctrl_len)) {
+                if (ftype == FRAME_TYPE_ACK && ctrl_len >= 3) {
+                    uint16_t sack_base = ((uint16_t)ctrl_data[0] << 8) | ctrl_data[1];
+                    uint8_t bitmap = ctrl_data[2];
+                    handle_sack_ack(sack_base, bitmap);
+                } else if (ftype == FRAME_TYPE_RESET) {
+                    handle_reset_frame();
+                    // If reset, we probably should abort, but for now we just continue 
+                    // (next_seq/base_seq reset to 0, so loop condition will clear)
+                }
+             }
+             check_timeouts_and_retransmit();
+             
+             // Optional: yield or small delay if OS present, but here we busy-wait
+        }
+
+        uint16_t chunk_len = (uint16_t)((len - offset > MAX_DATA_SIZE) ? MAX_DATA_SIZE : (len - offset));
+        
+        // If this is the last chunk, preserve the original flags (e.g. FLAG_LAST_PACKET)
+        // Otherwise, mask out FLAG_LAST_PACKET because more chunks follow.
+        uint8_t current_flags = flags;
+        if (i < total_packets - 1) {
+            current_flags &= ~FLAG_LAST_PACKET;
+        }
+        
+        prepare_and_send_packet(data + offset, chunk_len, current_flags, total_packets, len, encoding_type);
+        offset += chunk_len;
+    }
 }
 
 static void handle_sack_ack(uint16_t sack_base, uint8_t bitmap) {
