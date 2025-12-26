@@ -41,10 +41,10 @@
 #define RESET_FRAME 0x55
 #define FLAG_LAST_PACKET 0x01
 #define FLAG_SIGN 0x02                  // where the last bit is reserved for last packet = 0x03
-#define FLAG_STARDOME_ATTESTATION 0x04    // where the last bit is reserved for last packet = 0x05
+#define FLAG_STARDOME_ATTESTATION 0x04  // where the last bit is reserved for last packet = 0x05
 #define FLAG_STARDOME_TREE 0x20         // where the last bit is reserved for last packet = 0x21
-#define FLAG_STARDOME 0x08              // where the last bit is reserved for last packet = 0x09
-#define FLAG_SN 0x0A                    // where the last bit is reserved for last packet = 0x0B
+#define FLAG_STARDOME_PROOF 0x08        // where the last bit is reserved for last packet = 0x09
+#define FLAG_STARDOME_DATA 0x80              // where the last bit is reserved for last packet = 0x81
 #define FLAG_STARDOME_SN 0x40           // where the last bit is reserved for last packet = 0x41
 #define FLAG_STATUS 0x0E                // where the last bit is reserved for last packet = 0x0F
 #define FLAG_STARDOME_STATUS 0x10       // where the last bit is reserved for last packet = 0x11
