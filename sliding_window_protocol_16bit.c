@@ -301,21 +301,27 @@ const char* get_encoding_type_name(uint8_t encoding_type) {
 // #############################################################################
 
 // CRC-16 calculation (CRC-16-CCITT, polynomial 0x1021)
-static uint16_t compute_crc16(const uint8_t *data, uint16_t len) {
-    uint16_t crc = 0xFFFF;  // Initial value
-    
-    for (uint16_t i = 0; i < len; i++) {
-        crc ^= ((uint16_t)data[i] << 8);
-        
-        for (uint8_t bit = 0; bit < 8; bit++) {
-            if (crc & 0x8000) {
-                crc = (crc << 1) ^ 0x1021;  // Polynomial
-            } else {
-                crc = crc << 1;
-            }
+static inline uint16_t crc16_ccitt_update(uint16_t crc, uint8_t data) {
+    crc ^= ((uint16_t)data << 8);
+
+    for (uint8_t bit = 0; bit < 8; bit++) {
+        if (crc & 0x8000) {
+            crc = (uint16_t)((crc << 1) ^ 0x1021);
+        } else {
+            crc = (uint16_t)(crc << 1);
         }
     }
-    
+
+    return crc;
+}
+
+static uint16_t compute_crc16(const uint8_t *data, uint16_t len) {
+    uint16_t crc = 0xFFFF;  // Initial value
+
+    for (uint16_t i = 0; i < len; i++) {
+        crc = crc16_ccitt_update(crc, data[i]);
+    }
+
     return crc;
 }
 
@@ -371,14 +377,17 @@ static void send_packet_struct(Packet *pkt) {
     le16_write(&header[9], pkt->data_length);
     header[11] = pkt->encoding_type;
 
-    const uint16_t crc_input_len = (uint16_t)(sizeof(header) + pkt->data_length + sizeof(pkt->token));
-    uint8_t crc_buf[12 + MAX_DATA_SIZE + sizeof(uint16_t)];
-
-    memcpy(crc_buf, header, sizeof(header));
-    memcpy(&crc_buf[sizeof(header)], pkt->data, pkt->data_length);
-    le16_write(&crc_buf[sizeof(header) + pkt->data_length], pkt->token);
-
-    const uint16_t crc = compute_crc16(crc_buf, crc_input_len);
+    // Compute CRC incrementally to avoid large stack allocations.
+    // CRC covers: header + payload + token (little-endian), excluding the CRC itself.
+    uint16_t crc = 0xFFFF;
+    for (uint16_t i = 0; i < (uint16_t)sizeof(header); i++) {
+        crc = crc16_ccitt_update(crc, header[i]);
+    }
+    for (uint16_t i = 0; i < pkt->data_length; i++) {
+        crc = crc16_ccitt_update(crc, pkt->data[i]);
+    }
+    crc = crc16_ccitt_update(crc, (uint8_t)(pkt->token & 0xFF));
+    crc = crc16_ccitt_update(crc, (uint8_t)((pkt->token >> 8) & 0xFF));
     pkt->crc = crc;
 
     uart_send_byte(FRAME_BYTE);
@@ -490,11 +499,21 @@ static bool receive_any_frame(FrameType *type, Packet *pkt,
 
     *type = FRAME_TYPE_DATA;
 
-    uint8_t frame[12 + MAX_DATA_SIZE + 4]; // header + data + token + crc
+    // Large buffer; keep off the stack to reduce overflow risk.
+    static uint8_t frame[SWP_MAX_FRAME_UNSTUFFED]; // header + data + token + crc
     uint16_t flen = 0;
+    bool overflowed = false;
+    uint16_t raw_count = 0;
+
+    // First byte already read (after start delimiter).
+    raw_count = 1U;
+    if (raw_count > SWP_MAX_FRAME_STUFFED) {
+        conn_state.dropped_frames++;
+        return false;
+    }
     frame[flen++] = byte;
 
-    while (flen < sizeof(frame)) {
+    while (true) {
         if (!uart_RX_available()) {
             if ((millis() - last_byte_ms) > BYTE_TIMEOUT_MS) {
                 return false;
@@ -505,16 +524,49 @@ static bool receive_any_frame(FrameType *type, Packet *pkt,
         byte = uart_receive_byte();
         last_byte_ms = millis();
 
-        if (in_escape) {
-            frame[flen++] = byte ^ STUFF_BYTE;
-            in_escape = false;
-        } else if (byte == ESCAPE_CHAR) {
-            in_escape = true;
-        } else if (byte == FRAME_BYTE) {
-            break;
-        } else {
-            frame[flen++] = byte;
+        if (byte != FRAME_BYTE) {
+            raw_count++;
+            if (raw_count > SWP_MAX_FRAME_STUFFED) {
+                conn_state.dropped_frames++;
+                return false;
+            }
         }
+
+        if (in_escape) {
+            uint8_t unstuffed = (uint8_t)(byte ^ STUFF_BYTE);
+            in_escape = false;
+            if (!overflowed) {
+                if (flen < sizeof(frame)) {
+                    frame[flen++] = unstuffed;
+                } else {
+                    overflowed = true;
+                    conn_state.dropped_frames++;
+                }
+            }
+            continue;
+        }
+
+        if (byte == ESCAPE_CHAR) {
+            in_escape = true;
+            continue;
+        }
+
+        if (byte == FRAME_BYTE) {
+            break;
+        }
+
+        if (!overflowed) {
+            if (flen < sizeof(frame)) {
+                frame[flen++] = byte;
+            } else {
+                overflowed = true;
+                conn_state.dropped_frames++;
+            }
+        }
+    }
+
+    if (overflowed) {
+        return false;
     }
 
     if (flen < (12 + 2 + 2)) {

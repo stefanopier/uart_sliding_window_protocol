@@ -45,6 +45,19 @@ Control frames are single control bytes inside a frame (ACK, NACK, RESET) and ma
 
 ---
 
+## Frame sizing (implementation guidance) 📐
+
+To help third-party implementations allocate buffers safely, the reference header defines these sizing macros:
+
+- `SWP_FRAME_HEADER_LEN` = 12 bytes
+- `SWP_FRAME_TRAILER_LEN` = 4 bytes (token + CRC)
+- `SWP_MAX_FRAME_UNSTUFFED` = header + payload + trailer
+- `SWP_MAX_FRAME_STUFFED` = worst-case byte-stuffed size (+2 for delimiters)
+
+These values are derived directly from the wire format above and match the MCU implementation.
+
+---
+
 ## Constants and flags 🔢
 
 Important constants in the header:
@@ -59,8 +72,45 @@ Important constants in the header:
 - `WINDOW_SIZE` — configured by `SWP_WINDOW_SIZE`
 
 Flags used in packet `flags` byte (some are project-specific):
-- `FLAG_LAST_PACKET` — last packet of a sequence
-- `FLAG_SIGN` etc. — (Stardome project-specific, not included)
+
+`FLAG_LAST_PACKET` is a marker bit (0x01) that may be OR’d into the base flag to indicate the final fragment of a sequence. All other flag values below are base types; OR with `FLAG_LAST_PACKET` when needed.
+
+### Stardome flags (base values)
+
+| Flag | Value (hex) | Notes |
+|------|-------------|-------|
+| `FLAG_SIGN` | 0x02 | SIGN request (CBOR payload) |
+| `FLAG_STARDOME_ATTESTATION` | 0x04 | Attestation request |
+| `FLAG_STARDOME_PROOF` | 0x08 | Proof request |
+| `FLAG_STARDOME_STATUS` | 0x10 | Status request |
+| `FLAG_STARDOME_DATA` | 0x12 | Data request |
+| `FLAG_STARDOME_TREE` | 0x20 | Merkle tree request |
+| `FLAG_STARDOME_HOST_ID` | 0x40 | Host ID request |
+| `FLAG_STARDOME_LOWMODE` | 0x50 | Low-power mode |
+| `FLAG_STARDOME_HIGHMODE` | 0x70 | High-power mode |
+| `FLAG_STARDOME_OFF` | 0x80 | Power off |
+| `FLAG_STARDOME_STATUS_DATA` | 0x90 | Status data response |
+| `FLAG_BOARD_STATUS` | 0xA0 | Board status request |
+| `FLAG_BOARD_STATUS_DATA` | 0xB0 | Board status response |
+| `FLAG_STARDOME_PROOF_DATA` | 0xB2 | Proof data response |
+
+### Error response flags
+
+Error responses use a base error flag and a 1-byte payload error code. The error flag is OR’d with `FLAG_LAST_PACKET` when sent.
+
+| Error flag | Value (hex) | Applies to |
+|-----------|-------------|------------|
+| `FLAG_SIGN_ERROR` | 0xC2 | `FLAG_SIGN` |
+| `FLAG_STARDOME_PROOF_ERROR` | 0xC4 | `FLAG_STARDOME_PROOF` |
+| `FLAG_STARDOME_DATA_ERROR` | 0xC6 | `FLAG_STARDOME_DATA` |
+| `FLAG_STARDOME_STATUS_ERROR` | 0xC8 | `FLAG_STARDOME_STATUS` |
+| `FLAG_BOARD_STATUS_ERROR` | 0xCA | `FLAG_BOARD_STATUS` |
+| `FLAG_STARDOME_HOST_ID_ERROR` | 0xCC | `FLAG_STARDOME_HOST_ID` |
+| `FLAG_STARDOME_OFF_ERROR` | 0xCE | `FLAG_STARDOME_OFF` |
+| `FLAG_STARDOME_LOWMODE_ERROR` | 0xD8 | `FLAG_STARDOME_LOWMODE` |
+| `FLAG_STARDOME_HIGHMODE_ERROR` | 0xDA | `FLAG_STARDOME_HIGHMODE` |
+
+Flags that do not have a dedicated error flag in the MCU implementation should be treated as NACK-only errors by default.
 
 ---
 
