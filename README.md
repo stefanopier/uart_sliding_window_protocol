@@ -71,6 +71,8 @@ Important constants in the header:
 - `MAX_DATA_SIZE` — configured by `SWP_MAX_DATA_SIZE`
 - `WINDOW_SIZE` — configured by `SWP_WINDOW_SIZE`
 
+Note: The `SWP_*` prefix denotes Sliding Window Protocol-related defines.
+
 Flags used in packet `flags` byte (some are project-specific):
 
 `FLAG_LAST_PACKET` is a marker bit (0x01) that may be OR’d into the base flag to indicate the final fragment of a sequence. All other flag values below are base types; OR with `FLAG_LAST_PACKET` when needed.
@@ -117,7 +119,7 @@ Flags that do not have a dedicated error flag in the MCU implementation should b
 ## Control frames and SACK 📨
 
 - ACK: ack frame begins with `ACK` followed by 16-bit base seq (big-endian) and a bitmap that represents reception of subsequent packets within the `WINDOW_SIZE`. The bitmap is used for SACK.
-- NACK: simple NACK frame (no SACK body for UNO build); senders can trigger retransmit policy.
+- NACK: simple NACK frame (no body in this implementation); senders can trigger retransmit policy.
 - RESET: a control frame instructing both sides to reset sequence numbers and state.
 
 SACK bitmap example (WINDOW_SIZE=8): bitmap bit 0 corresponds to `base_seq`, bit1 to `base_seq+1`, …
@@ -127,7 +129,7 @@ SACK bitmap example (WINDOW_SIZE=8): bitmap bit 0 corresponds to `base_seq`, bit
 ## CRC & Token 🛡️
 
 - The CRC is computed over header + data + token using CRC-16-CCITT (poly 0x1021) and stored in the trailing 2 bytes.
-- `SHARED_TOKEN` (default `0xABCD`) must match on both peers; otherwise, the frame is discarded and a debug pulse may be emitted.
+- `SHARED_TOKEN` (default `0xABCD`) must match on both peers; otherwise, the frame is discarded.
 
 ---
 
@@ -148,8 +150,6 @@ Note: The receiver and sender expect the platform to implement these hooks in us
 - `bool uart_RX_available(void)` — non-blocking; returns whether the serial buffer has >=1 byte ready.
 - `uint32_t millis(void)` — millisecond clock for timeout handling.
 
-For UNO-specific operation, the optional functions are present to help: `swp_debug_pulse(uint8_t)` and `uart_flush(void)`.
-
 ---
 
 ## Data encoding types table 🗂️
@@ -161,7 +161,7 @@ For UNO-specific operation, the optional functions are present to help: `swp_deb
 | 0x02 | ENCODING_UTF8 | UTF8 text |
 | 0x03 | ENCODING_JSON | JSON |
 | 0x04 | ENCODING_CBOR | CBOR |
-| 0x05 | ENCODING_BASE64 | Base64 |
+| 0x05 | ENCODING_BASE64 | Reserved for future use (not accepted by default implementation) |
 | 0x06 | ENCODING_HEX | Hex string |
 | 0x07 | ENCODING_TLV_BINARY | TLV binary |
 | 0x08 | ENCODING_TLV_ASCII | TLV ASCII |

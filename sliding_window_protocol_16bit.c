@@ -32,6 +32,12 @@ __attribute__((weak)) uint32_t millis(void) {
     return 0U;
 }
 
+__attribute__((weak)) bool handle_flag_sign_packet(const uint8_t *data, uint16_t len) {
+    (void)data;
+    (void)len;
+    return false;
+}
+
 // #############################################################################
 // ## Private Variables
 // #############################################################################

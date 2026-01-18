@@ -199,6 +199,10 @@ bool uart_RX_available(void);
 
 uint32_t millis(void);
 
+// Optional Stardome hook: override to process SIGN payloads on MCU side.
+// Public repo provides a weak default in the .c file.
+bool handle_flag_sign_packet(const uint8_t *data, uint16_t len);
+
 // Externs for application-managed UART globals (would be defined in application code)
 extern volatile uint16_t uartRxBuffer_count;
 extern uint16_t uartRxBuffer_capacity;
