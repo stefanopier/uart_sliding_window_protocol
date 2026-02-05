@@ -1,6 +1,6 @@
 # uart_sliding_window_protocol
 
-This repository contains an implementation of a lightweight UART-based sliding-window protocol with 16-bit sequence numbers, SACK (selective acknowledgements), CRC-16 validation, a shared security token, and several encoding types.
+This repository contains an implementation of a lightweight UART-based sliding-window protocol with 16-bit frame indices, SACK (selective acknowledgements), CRC-16 validation, a shared security token, and several encoding types.
 
 This README documents the wire format, framing rules, primary constants, control frames, and public API used in the implementation. There is also a small-footprint variant under `test_arduino/uno_min_test` which shows how to tune the protocol for constrained MCUs such as an Arduino UNO.
 
@@ -10,7 +10,7 @@ This README documents the wire format, framing rules, primary constants, control
 
 - 16-bit frame indices (wire field `seq`, wrap-around supported)
 - Configurable sliding window (via `WINDOW_SIZE` macro)
-- Break payloads into multiple packets using `seq_length` and `seq_size`
+- Break payloads into multiple frames using `seq_length` and `seq_size`
 - SACK support — receiver returns a bitmap of received packets in the current window
 - CRC-16 (x^16 + x^12 + x^5 + 1) using polynomial `0x1021` (CRC-CCITT) on header+data+token
 - Shared token to prevent cross-talk or accidental frames from unrelated hosts
@@ -126,26 +126,26 @@ SACK bitmap example (WINDOW_SIZE=8): `window_frames` bit 0 corresponds to `sack_
 
 ### SACK example (Case A — no loss, 10 frames)
 
-Assume `WINDOW_SIZE=8` and a sequence of 10 frames with `seq` values 0..9.
+Assume `WINDOW_SIZE=8` and a sequence of 10 frames with `frame_index` values 0..9.
 
-1) MCU sends the first window: `seq=0..7`
+1) MCU sends the first window: `frame_index=0..7`
 
 2) Host receives all 0..7 and sends one SACK:
 
 ```
-ACK sack_base=0 window_frames=0xFF   // ACKs seq 0..7
+ACK sack_base=0 window_frames=0xFF   // ACKs frame_index 0..7
 ```
 
-3) MCU sends the remaining frames: `seq=8,9`
+3) MCU sends the remaining frames: `frame_index=8,9`
 
 4) Host ACKs those with a second SACK:
 
 ```
-ACK sack_base=8 window_frames=0x03   // ACKs seq 8,9
+ACK sack_base=8 window_frames=0x03   // ACKs frame_index 8,9
 ```
 
 Notes:
-- `seq` is the per-frame index on the wire (16-bit, wraps).
+- `seq` is the per-frame index on the wire (16-bit, wraps). In code, it is referred to as `frame_index`.
 - `sack_base` is the absolute base used for the bitmap offsets.
 
 ---

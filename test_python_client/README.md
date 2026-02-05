@@ -4,7 +4,7 @@ Python-based serial test client for the MCU sliding window protocol implementati
 
 ## Features
 
-- ✅ Full sliding window protocol with 16-bit sequence numbers
+- ✅ Full sliding window protocol with 16-bit frame indices
 - ✅ CRC-16-CCITT error detection
 - ✅ Byte stuffing/unstuffing for frame delimiting (0x7E, 0x7D)
 - ✅ SACK (Selective Acknowledgment) support
@@ -238,8 +238,8 @@ PC Client                          MCU
 **Escaped Data Content:**
 ```c
 flags         (1 byte)  // FLAG_LAST_PACKET = 0x01
-seq           (2 bytes) // Sequence number
-seq_length    (2 bytes) // Total packets in sequence
+frame_index   (2 bytes) // Frame index within the sequence (16-bit, wraps)
+seq_length    (2 bytes) // Total frames in sequence
 seq_size      (4 bytes) // Total data size
 data_length   (2 bytes) // Length of data in this packet
 encoding_type (1 byte)  // ENCODING_ASCII = 0x01
@@ -380,7 +380,7 @@ When modifying the protocol:
 1. Update both MCU (`sliding_window_protocol_16bit.c`) and Python client
 2. Maintain CRC-16 compatibility
 3. Test byte stuffing edge cases (0x7E, 0x7D in payload)
-4. Verify sequence number wrapping at 65536
+4. Verify frame index wrapping at 65536
 
 ## License
 
