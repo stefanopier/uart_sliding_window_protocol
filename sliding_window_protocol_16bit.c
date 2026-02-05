@@ -44,12 +44,12 @@ __attribute__((weak)) bool handle_flag_sign_packet(const uint8_t *data, uint16_t
 
 // Receiver-side buffer management
 static BufferSlot recv_window[WINDOW_SIZE];
-static uint16_t expected_seq = 0;
+static uint16_t expected_frame_index = 0;
 
 // Enhanced sender-side buffer management with MIN-inspired features
 static EnhancedSendSlot send_window[WINDOW_SIZE];
-static uint16_t base_seq = 0;
-static uint16_t next_seq = 0;
+static uint16_t base_frame_index = 0;
+static uint16_t next_frame_index = 0;
 static ConnectionState conn_state = {0};
 
 typedef enum {
@@ -69,7 +69,7 @@ static void send_escaped_byte(uint8_t byte);
 static void send_packet_struct(Packet *pkt);
 static bool receive_any_frame(FrameType *type, Packet *pkt, uint8_t *ctrl_data, uint8_t *ctrl_len);
 static void store_packet(Packet *pkt);
-static uint8_t generate_sack_bitmap(void);
+static uint8_t generate_sack_window(void);
 static void send_sack_ack(void);
 static void send_nack(void);
 static void process_in_order_packets(uint8_t *output, uint16_t *output_len);
@@ -77,7 +77,7 @@ static void init_connection_state(void);
 static void update_connection_activity(void);
 static bool is_connection_alive(void);
 static void prepare_and_send_packet(const uint8_t *data, uint16_t len, uint8_t flags, uint16_t total_packets, uint32_t total_size, uint8_t encoding_type);
-static void handle_sack_ack(uint16_t sack_base, uint8_t bitmap);
+static void handle_sack_ack(uint16_t sack_base, uint8_t window_frames);
 static void check_timeouts_and_retransmit(void);
 static void handle_reset_frame(void);
 static bool validate_packet_sequence(Packet *pkt);
@@ -103,9 +103,9 @@ void init_sliding_window_protocol(void) {
         recv_window[i].received = false;
     }
     
-    base_seq = 0;
-    next_seq = 0;
-    expected_seq = 0;
+    base_frame_index = 0;
+    next_frame_index = 0;
+    expected_frame_index = 0;
 }
 
 void reliable_send_buffered(const uint8_t *data, uint16_t total_len) {
@@ -120,8 +120,8 @@ void reliable_send_buffered_with_encoding(const uint8_t *data, uint16_t total_le
     uint16_t offset = 0;
     uint16_t total_packets = (total_len + MAX_DATA_SIZE - 1) / MAX_DATA_SIZE;
 
-    while (offset < total_len || base_seq != next_seq) {
-        while (((next_seq - base_seq + MAX_SEQ_NUM) % MAX_SEQ_NUM) < WINDOW_SIZE &&
+    while (offset < total_len || base_frame_index != next_frame_index) {
+        while (((next_frame_index - base_frame_index + MAX_SEQ_NUM) % MAX_SEQ_NUM) < WINDOW_SIZE &&
                offset < total_len) {
             uint16_t chunk_len = (total_len - offset > MAX_DATA_SIZE) ? MAX_DATA_SIZE : (total_len - offset);
             uint8_t flags = (offset + chunk_len >= total_len) ? FLAG_LAST_PACKET : 0;
@@ -139,8 +139,8 @@ void reliable_send_buffered_with_encoding(const uint8_t *data, uint16_t total_le
         if (receive_any_frame(&ftype, &dummy_pkt, ctrl_data, &ctrl_len)) {
             if (ftype == FRAME_TYPE_ACK && ctrl_len >= 3) {
                 uint16_t sack_base = ((uint16_t)ctrl_data[0] << 8) | ctrl_data[1];
-                uint8_t bitmap = ctrl_data[2];
-                handle_sack_ack(sack_base, bitmap);
+                uint8_t window_frames = ctrl_data[2];
+                handle_sack_ack(sack_base, window_frames);
             } else if (ftype == FRAME_TYPE_NACK) {
                 // Optional: could trigger more aggressive retransmission if desired
             } else if (ftype == FRAME_TYPE_RESET) {
@@ -226,8 +226,8 @@ void reliable_receive_buffered_with_encoding(uint8_t *output, volatile uint16_t 
             }
         } else if (ftype == FRAME_TYPE_ACK && ctrl_len >= 3) {
             uint16_t sack_base = ((uint16_t)ctrl_data[0] << 8) | ctrl_data[1];
-            uint8_t bitmap = ctrl_data[2];
-            handle_sack_ack(sack_base, bitmap);
+            uint8_t window_frames = ctrl_data[2];
+            handle_sack_ack(sack_base, window_frames);
         } else if (ftype == FRAME_TYPE_NACK) {
             // Optional: handle NACK on receiver side if needed
         } else if (ftype == FRAME_TYPE_RESET) {
@@ -364,7 +364,7 @@ static void send_packet_struct(Packet *pkt) {
      * Wire format
      * [FRAME_BYTE]
      *   flags (1) |
-     *   seq (2) |
+    *   frame_index (2) |
      *   seq_length (2) |
      *   seq_size (4) |
      *   data_length (2) |
@@ -377,7 +377,7 @@ static void send_packet_struct(Packet *pkt) {
 
     uint8_t header[12];
     header[0] = pkt->flags;
-    le16_write(&header[1], pkt->seq);
+    le16_write(&header[1], pkt->frame_index);
     le16_write(&header[3], pkt->seq_length);
     le32_write(&header[5], pkt->seq_size);
     le16_write(&header[9], pkt->data_length);
@@ -581,7 +581,7 @@ static bool receive_any_frame(FrameType *type, Packet *pkt,
 
     const uint8_t *h = frame;
     pkt->flags = h[0];
-    pkt->seq = (uint16_t)h[1] | ((uint16_t)h[2] << 8);
+    pkt->frame_index = (uint16_t)h[1] | ((uint16_t)h[2] << 8);
     pkt->seq_length = (uint16_t)h[3] | ((uint16_t)h[4] << 8);
     pkt->seq_size = (uint32_t)h[5] | ((uint32_t)h[6] << 8) | ((uint32_t)h[7] << 16) | ((uint32_t)h[8] << 24);
     pkt->data_length = (uint16_t)h[9] | ((uint16_t)h[10] << 8);
@@ -624,32 +624,32 @@ static bool receive_any_frame(FrameType *type, Packet *pkt,
 }
 
 static void store_packet(Packet *pkt) {
-    uint16_t index = (pkt->seq - expected_seq + MAX_SEQ_NUM) % MAX_SEQ_NUM;
+    uint16_t index = (pkt->frame_index - expected_frame_index + MAX_SEQ_NUM) % MAX_SEQ_NUM;
     if (index < WINDOW_SIZE && !recv_window[index].received) {
         recv_window[index].pkt = *pkt;
         recv_window[index].received = true;
     }
 }
 
-static uint8_t generate_sack_bitmap(void) {
-    uint8_t bitmap = 0;
+static uint8_t generate_sack_window(void) {
+    uint8_t window_frames = 0;
     for (int i = 0; i < WINDOW_SIZE; i++) {
         if (recv_window[i].received) {
-            bitmap |= (1 << i);
+            window_frames |= (1 << i);
         }
     }
-    return bitmap;
+    return window_frames;
 }
 
 static void send_sack_ack(void) {
-    uint8_t bitmap = generate_sack_bitmap();
+    uint8_t window_frames = generate_sack_window();
     
     // Send ACK frame with byte stuffing
     uart_send_byte(FRAME_BYTE);
     send_escaped_byte(ACK);
-    send_escaped_byte((expected_seq >> 8) & 0xFF);
-    send_escaped_byte(expected_seq & 0xFF);
-    send_escaped_byte(bitmap);
+    send_escaped_byte((expected_frame_index >> 8) & 0xFF);
+    send_escaped_byte(expected_frame_index & 0xFF);
+    send_escaped_byte(window_frames);
     uart_send_byte(FRAME_BYTE);
     
     conn_state.last_sent_ack_time_ms = millis();
@@ -663,7 +663,7 @@ static void send_nack(void) {
 }
 
 static void process_in_order_packets(uint8_t *output, uint16_t *output_len) {
-    while (recv_window[0].received && recv_window[0].pkt.seq == expected_seq) {
+    while (recv_window[0].received && recv_window[0].pkt.frame_index == expected_frame_index) {
         Packet *p = &recv_window[0].pkt;
         memcpy(&output[*output_len], p->data, p->data_length);
         *output_len += p->data_length;
@@ -676,7 +676,7 @@ static void process_in_order_packets(uint8_t *output, uint16_t *output_len) {
             recv_window[i - 1] = recv_window[i];
         }
         recv_window[WINDOW_SIZE - 1].received = false;
-        expected_seq = (expected_seq + 1) % MAX_SEQ_NUM;
+        expected_frame_index = (expected_frame_index + 1) % MAX_SEQ_NUM;
     }
 }
 
@@ -702,11 +702,11 @@ static bool is_connection_alive(void) {
 }
 
 static void prepare_and_send_packet(const uint8_t *data, uint16_t len, uint8_t flags, uint16_t total_packets, uint32_t total_size, uint8_t encoding_type) {
-    uint8_t index = next_seq % WINDOW_SIZE;
+    uint8_t index = next_frame_index % WINDOW_SIZE;
 
     Packet *pkt = &send_window[index].pkt;
     pkt->flags = flags;
-    pkt->seq = next_seq;
+    pkt->frame_index = next_frame_index;
     pkt->seq_length = total_packets;
     pkt->seq_size = total_size;
     pkt->data_length = len;
@@ -721,9 +721,9 @@ static void prepare_and_send_packet(const uint8_t *data, uint16_t len, uint8_t f
     send_window[index].last_sent_time_ms = millis();
     send_window[index].retransmit_count = 0;
 
-    next_seq = (next_seq + 1) % MAX_SEQ_NUM;
+    next_frame_index = (next_frame_index + 1) % MAX_SEQ_NUM;
     
-    uint8_t current_window_usage = ((next_seq - base_seq + MAX_SEQ_NUM) % MAX_SEQ_NUM);
+    uint8_t current_window_usage = ((next_frame_index - base_frame_index + MAX_SEQ_NUM) % MAX_SEQ_NUM);
     if (current_window_usage > conn_state.max_window_usage) {
         conn_state.max_window_usage = current_window_usage;
     }
@@ -744,8 +744,8 @@ void sliding_window_send_fragmented(const uint8_t *data, uint32_t len, uint8_t f
     
     for (uint16_t i = 0; i < total_packets; i++) {
         // Wait for window space: block while the window is full
-        // (next_seq - base_seq) >= WINDOW_SIZE
-        while ( ((next_seq - base_seq + MAX_SEQ_NUM) % MAX_SEQ_NUM) >= WINDOW_SIZE ) {
+        // (next_frame_index - base_frame_index) >= WINDOW_SIZE
+        while ( ((next_frame_index - base_frame_index + MAX_SEQ_NUM) % MAX_SEQ_NUM) >= WINDOW_SIZE ) {
              // Poll for ACKs to advance window
              Packet rx_pkt;
              FrameType ftype;
@@ -756,12 +756,12 @@ void sliding_window_send_fragmented(const uint8_t *data, uint32_t len, uint8_t f
              if (receive_any_frame(&ftype, &rx_pkt, ctrl_data, &ctrl_len)) {
                 if (ftype == FRAME_TYPE_ACK && ctrl_len >= 3) {
                     uint16_t sack_base = ((uint16_t)ctrl_data[0] << 8) | ctrl_data[1];
-                    uint8_t bitmap = ctrl_data[2];
-                    handle_sack_ack(sack_base, bitmap);
+                    uint8_t window_frames = ctrl_data[2];
+                    handle_sack_ack(sack_base, window_frames);
                 } else if (ftype == FRAME_TYPE_RESET) {
                     handle_reset_frame();
                     // If reset, we probably should abort, but for now we just continue 
-                    // (next_seq/base_seq reset to 0, so loop condition will clear)
+                    // (next_frame_index/base_frame_index reset to 0, so loop condition will clear)
                 }
              }
              check_timeouts_and_retransmit();
@@ -783,14 +783,14 @@ void sliding_window_send_fragmented(const uint8_t *data, uint32_t len, uint8_t f
     }
 }
 
-static void handle_sack_ack(uint16_t sack_base, uint8_t bitmap) {
+static void handle_sack_ack(uint16_t sack_base, uint8_t window_frames) {
     bool valid_ack = false;
     
     for (int i = 0; i < WINDOW_SIZE; i++) {
-        uint16_t seq = (sack_base + i) % MAX_SEQ_NUM;
-        uint8_t index = seq % WINDOW_SIZE;
+        uint16_t frame_index = (sack_base + i) % MAX_SEQ_NUM;
+        uint8_t index = frame_index % WINDOW_SIZE;
 
-        if (bitmap & (1 << i)) {
+        if (window_frames & (1 << i)) {
             if (send_window[index].sent && !send_window[index].acked) {
                 send_window[index].acked = true;
                 valid_ack = true;
@@ -804,11 +804,11 @@ static void handle_sack_ack(uint16_t sack_base, uint8_t bitmap) {
         update_connection_activity();
     }
 
-    while (send_window[base_seq % WINDOW_SIZE].acked) {
-        send_window[base_seq % WINDOW_SIZE].sent = false;
-        send_window[base_seq % WINDOW_SIZE].acked = false;
-        send_window[base_seq % WINDOW_SIZE].retransmit_count = 0;
-        base_seq = (base_seq + 1) % MAX_SEQ_NUM;
+    while (send_window[base_frame_index % WINDOW_SIZE].acked) {
+        send_window[base_frame_index % WINDOW_SIZE].sent = false;
+        send_window[base_frame_index % WINDOW_SIZE].acked = false;
+        send_window[base_frame_index % WINDOW_SIZE].retransmit_count = 0;
+        base_frame_index = (base_frame_index + 1) % MAX_SEQ_NUM;
     }
 }
 
@@ -844,9 +844,9 @@ static void handle_reset_frame(void) {
         send_window[i].retransmit_count = 0;
     }
     
-    base_seq = 0;
-    next_seq = 0;
-    expected_seq = 0;
+    base_frame_index = 0;
+    next_frame_index = 0;
+    expected_frame_index = 0;
     
     for (int i = 0; i < WINDOW_SIZE; i++) {
         recv_window[i].received = false;
@@ -857,7 +857,7 @@ static void handle_reset_frame(void) {
 }
 
 static bool validate_packet_sequence(Packet *pkt) {
-    uint16_t seq_diff = (pkt->seq - expected_seq + MAX_SEQ_NUM) % MAX_SEQ_NUM;
+    uint16_t seq_diff = (pkt->frame_index - expected_frame_index + MAX_SEQ_NUM) % MAX_SEQ_NUM;
     
     if (seq_diff >= WINDOW_SIZE) {
         conn_state.sequence_mismatch_drop++;

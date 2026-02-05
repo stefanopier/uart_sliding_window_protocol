@@ -96,7 +96,7 @@ Once connected, use these commands:
 ```
 $ python sliding_window_client.py --port COM10 --baud 115200 --json-file payload.json
 ✓ Connected to COM10 at 115200 baud
-→ Sent packet seq=0, len=44, frame_bytes=64, preview='{
+→ Sent packet frame_idx=0, len=44, frame_bytes=64, preview='{
   "msg": "Lorem ipsum dolo…'
   Waiting for echo response...
 ← Received ACK
@@ -126,7 +126,7 @@ To exercise the MCU at its maximum payload size (1,024 bytes by default), use th
 $ python sliding_window_client.py --port COM10 --baud 115200 --payload-file payload_1024 --target generic
 ✓ Connected to COM10 at 115200 baud
 Loaded raw payload: 1024 bytes from payload_1024
-→ Sent packet seq=0, len=1024, frame_bytes=1040, preview='\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f…'
+→ Sent packet frame_idx=0, len=1024, frame_bytes=1040, preview='\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f…'
   Waiting for echo response...
 ← Received echo (1024 bytes)
 ✓ Echo matches!
@@ -152,11 +152,11 @@ $ python sliding_window_client.py --port COM10 --baud 115200 --payload-file payl
 ✓ Connected to COM10 at 115200 baud
 Loaded raw payload: 1024 bytes from payload_1024
 → Sending sequence of 2 packets (1024 bytes total, chunk=512)
-→ Sent packet seq=0/2, len=512, frame_bytes=528, preview='\x00\x01\x02\x03\x04\x05\x06\x07…'
-→ Sent packet seq=1/2, len=512, frame_bytes=528, preview='\x80\x81\x82\x83\x84\x85\x86\x87…'
+→ Sent packet frame_idx=0/2, len=512, frame_bytes=528, preview='\x00\x01\x02\x03\x04\x05\x06\x07…'
+→ Sent packet frame_idx=1/2, len=512, frame_bytes=528, preview='\x80\x81\x82\x83\x84\x85\x86\x87…'
   Waiting for echo sequence...
-→ Sent ACK seq_base=0, bitmap=0x01
-→ Sent ACK seq_base=1, bitmap=0x01
+→ Sent ACK sack_base=0, window_frames=0x01
+→ Sent ACK sack_base=1, window_frames=0x01
 ← Received sequence (1024 bytes across 2 packets)
 ✓ Echo matches!
 
@@ -176,7 +176,7 @@ Statistics:
 $ python sliding_window_client.py --port COM10 --baud 115200 --json-file payload.json --debug
 ✓ Connected to COM10 at 115200 baud
 [DBG RAW TX] 7e01000001002c0000002c00027b0a20202020226d7367223a20224c6f72656d20697073756d20646f6c6f722073697420616d65742c220a7d5dcdab219f7e
-→ Sent packet seq=0, len=44, frame_bytes=64, preview='{
+→ Sent packet frame_idx=0, len=44, frame_bytes=64, preview='{
     "msg": "Lorem ipsum dolo…'
   Waiting for echo response...
 [DBG RAW RX] 0x7E
@@ -189,12 +189,12 @@ $ python sliding_window_client.py --port COM10 --baud 115200 --json-file payload
 ...
 [DBG RAW RX] 0x7E
 [DBG RAW FRAME] 01010001002c0000002c00017b0a20202020226d7367223a20224c6f72656d20697073756d20646f6c6f722073697420616d65742c220a7dcdabc346
-[DBG] Data frame: seq=1, len=44, enc=1, token=0xABCD
+[DBG] Data frame: frame_idx=1, len=44, enc=1, token=0xABCD
 ← Received echo: '{
     "msg": "Lorem ipsum dolor sit amet,"
 }'
 [DBG RAW TX] 7e060001017e
-→ Sent ACK seq_base=1, bitmap=0x01
+→ Sent ACK sack_base=1, window_frames=0x01
 ✓ Echo matches!
 
 ============================================================

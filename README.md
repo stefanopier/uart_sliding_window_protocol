@@ -8,7 +8,7 @@ This README documents the wire format, framing rules, primary constants, control
 
 ## Protocol overview ✅
 
-- 16-bit sequence numbers (wrap-around supported)
+- 16-bit frame indices (wire field `seq`, wrap-around supported)
 - Configurable sliding window (via `WINDOW_SIZE` macro)
 - Break payloads into multiple packets using `seq_length` and `seq_size`
 - SACK support — receiver returns a bitmap of received packets in the current window
@@ -26,9 +26,9 @@ Wire format (logical):
 1. FRAME_BYTE (0x7E)
 2. header (12 bytes):
 	- flags (1 byte)
-	- seq (2 bytes, little-endian)
-	- seq_length (2 bytes, little-endian) — total packets in full sequence
-	- seq_size (4 bytes, little-endian) — total data length across all packets
+	- seq (2 bytes, little-endian) — frame index within the current sequence (16-bit, wraps)
+	- seq_length (2 bytes, little-endian) — total frames in the full sequence
+	- seq_size (4 bytes, little-endian) — total data length across all frames
 	- data_length (2 bytes, little-endian)
 	- encoding_type (1 byte)
 3. data (data_length bytes)
@@ -118,11 +118,35 @@ Flags that do not have a dedicated error flag in the MCU implementation should b
 
 ## Control frames and SACK 📨
 
-- ACK: ack frame begins with `ACK` followed by 16-bit base seq (big-endian) and a bitmap that represents reception of subsequent packets within the `WINDOW_SIZE`. The bitmap is used for SACK.
+- ACK: ack frame begins with `ACK` followed by 16-bit SACK base (big-endian) and `window_frames`, a bitmap that represents reception of subsequent packets within the `WINDOW_SIZE`.
 - NACK: simple NACK frame (no body in this implementation); senders can trigger retransmit policy.
 - RESET: a control frame instructing both sides to reset sequence numbers and state.
 
-SACK bitmap example (WINDOW_SIZE=8): bitmap bit 0 corresponds to `base_seq`, bit1 to `base_seq+1`, …
+SACK bitmap example (WINDOW_SIZE=8): `window_frames` bit 0 corresponds to `sack_base`, bit1 to `sack_base+1`, …
+
+### SACK example (Case A — no loss, 10 frames)
+
+Assume `WINDOW_SIZE=8` and a sequence of 10 frames with `seq` values 0..9.
+
+1) MCU sends the first window: `seq=0..7`
+
+2) Host receives all 0..7 and sends one SACK:
+
+```
+ACK sack_base=0 window_frames=0xFF   // ACKs seq 0..7
+```
+
+3) MCU sends the remaining frames: `seq=8,9`
+
+4) Host ACKs those with a second SACK:
+
+```
+ACK sack_base=8 window_frames=0x03   // ACKs seq 8,9
+```
+
+Notes:
+- `seq` is the per-frame index on the wire (16-bit, wraps).
+- `sack_base` is the absolute base used for the bitmap offsets.
 
 ---
 

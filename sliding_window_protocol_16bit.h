@@ -115,8 +115,8 @@
 // Enhanced packet structure with encoding type identifier
 typedef struct {
     uint8_t flags;
-    uint16_t seq;
-    uint16_t seq_length;     // Total number of packets in sequence
+    uint16_t frame_index;    // Frame index within the current sequence (16-bit, wraps)
+    uint16_t seq_length;     // Total number of frames in sequence
     uint32_t seq_size;       // Total amount of DATA to be sent in sequence
     uint16_t data_length;    // Length of data in this packet
     uint8_t encoding_type;   // Data encoding type identifier
