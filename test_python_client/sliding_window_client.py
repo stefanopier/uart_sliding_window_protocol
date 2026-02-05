@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Sliding Window Protocol Test Client
-Implements the 16-bit sequence number sliding window protocol with CRC-16, SACK, and byte stuffing.
+Implements the 16-bit frame index sliding window protocol with CRC-16, SACK, and byte stuffing.
 Compatible with the MCU implementation in sliding_window_protocol_16bit.c
 """
 
@@ -18,7 +18,7 @@ from enum import Enum
 
 # Protocol Constants
 WINDOW_SIZE = 8
-MAX_SEQ_NUM = 65536
+MAX_FRAME_INDEX = 65536
 MAX_PAYLOAD = 1024  # Total per-frame budget (matches MCU ring buffer)
 FRAME_OVERHEAD = 12 + 2 + 2  # header + token + CRC bytes after unstuffing
 MAX_FRAME_SIZE = MAX_PAYLOAD  # Alias for readability when discussing budgets
@@ -52,7 +52,7 @@ ESCAPE_CHAR = 0x7D
 STUFF_BYTE = 0x20
 
 # Flags
-FLAG_LAST_PACKET = 0x01
+FLAG_LAST_FRAME = 0x01
 FLAG_STARDOME_TREE = 0x26
 
 # Encoding types
@@ -74,7 +74,7 @@ class FrameType(Enum):
 
 
 @dataclass
-class Packet:
+class Frame:
     flags: int
     frame_index: int
     seq_length: int
@@ -112,8 +112,8 @@ class SlidingWindowClient:
 
         # Statistics
         self.stats = {
-            'packets_sent': 0,
-            'packets_received': 0,
+            'frames_sent': 0,
+            'frames_received': 0,
             'acks_sent': 0,
             'nacks_sent': 0,
             'crc_errors': 0,
@@ -166,16 +166,16 @@ class SlidingWindowClient:
     
     def send_escaped_byte(self, byte: int):
         """Send a byte with escape stuffing if needed."""
-        # Deprecated: kept for compatibility, prefer send_packet building wire bytes
+        # Deprecated: kept for compatibility, prefer send_frame building wire bytes
         if byte == FRAME_BYTE or byte == ESCAPE_CHAR:
             self.serial.write(bytes([ESCAPE_CHAR, byte ^ STUFF_BYTE]))
         else:
             self.serial.write(bytes([byte]))
     
-    def send_packet(self, data: bytes, flags: int = FLAG_LAST_PACKET, 
+    def send_frame(self, data: bytes, flags: int = FLAG_LAST_FRAME,
                    encoding_type: int = ENCODING_ASCII, frame_index: int = 0,
                    seq_length: int = 1, seq_size: Optional[int] = None):
-        """Send a data packet with framing and CRC."""
+        """Send a data frame with framing and CRC."""
         if self.max_payload is not None and len(data) > self.max_payload:
             raise ValueError(
                 f"Payload len {len(data)} exceeds configured limit ({self.max_payload} bytes)."
@@ -184,8 +184,8 @@ class SlidingWindowClient:
             raise ValueError("seq_length must be at least 1")
         if seq_size is None:
             seq_size = len(data)
-        # Build packet structure: flags(1) + seq(2) + seq_length(2) + seq_size(4) + data_length(2) + encoding_type(1)
-        packet_data = struct.pack(
+        # Build frame structure: flags(1) + frame_index(2) + seq_length(2) + seq_size(4) + data_length(2) + encoding_type(1)
+        frame_data = struct.pack(
             '<BHHLHB',
             flags,
             frame_index,
@@ -194,17 +194,17 @@ class SlidingWindowClient:
             len(data),  # data_length (2 bytes)
             encoding_type  # encoding_type (1 byte)
         )
-        packet_data += data
-        packet_data += struct.pack('<H', SHARED_TOKEN)
+        frame_data += data
+        frame_data += struct.pack('<H', SHARED_TOKEN)
         
         # Compute CRC over everything except CRC field
-        crc = self.compute_crc16(packet_data)
-        packet_data += struct.pack('<H', crc)
+        crc = self.compute_crc16(frame_data)
+        frame_data += struct.pack('<H', crc)
         
         # Build wire bytes with byte-stuffing so we can log the exact bytes
         wire = bytearray()
         wire.append(FRAME_BYTE)
-        for byte in packet_data:
+        for byte in frame_data:
             if byte == FRAME_BYTE or byte == ESCAPE_CHAR:
                 wire.append(ESCAPE_CHAR)
                 wire.append(byte ^ STUFF_BYTE)
@@ -219,17 +219,17 @@ class SlidingWindowClient:
         if getattr(self, 'debug', False):
             print(f"[DBG RAW TX] {wire.hex()}")
         
-        self.stats['packets_sent'] += 1
+        self.stats['frames_sent'] += 1
         preview = data[:32].decode('ascii', errors='replace')
         if len(data) > 32:
             preview += '…'
         frame_idx_desc = f"{frame_index}/{seq_length}" if seq_length > 1 else str(frame_index)
-        print(f"→ Sent packet frame_idx={frame_idx_desc}, len={len(data)}, frame_bytes={len(wire)}, preview='{preview}'")
+        print(f"→ Sent frame frame_idx={frame_idx_desc}, len={len(data)}, frame_bytes={len(wire)}, preview='{preview}'")
 
     def _send_and_wait(self, data: bytes, encoding_type: int):
         """Send a payload and wait for a response frame."""
         try:
-            self.send_packet(data, flags=FLAG_LAST_PACKET, encoding_type=encoding_type, frame_index=0)
+            self.send_frame(data, flags=FLAG_LAST_FRAME, encoding_type=encoding_type, frame_index=0)
         except ValueError as exc:
             print(f"✗ {exc}")
             return None
@@ -238,11 +238,11 @@ class SlidingWindowClient:
         start_time = time.time()
 
         while (time.time() - start_time) < (self.conn_timeout_ms / 1000.0):
-            frame_type, packet, ctrl_data = self.receive_frame()
+            frame_type, frame, ctrl_data = self.receive_frame()
 
-            if frame_type == FrameType.DATA and packet:
-                self.send_ack(packet.frame_index, window_frames=0x01)
-                return packet
+            if frame_type == FrameType.DATA and frame:
+                self.send_ack(frame.frame_index, window_frames=0x01)
+                return frame
 
             if frame_type == FrameType.ACK:
                 print("← Received ACK")
@@ -294,7 +294,7 @@ class SlidingWindowClient:
             return val
         return None
     
-    def receive_frame(self) -> Tuple[Optional[FrameType], Optional[Packet], Optional[bytes]]:
+    def receive_frame(self) -> Tuple[Optional[FrameType], Optional[Frame], Optional[bytes]]:
         """Receive and decode a frame."""
         # Wait for frame start
         start_time = time.time()
@@ -346,8 +346,8 @@ class SlidingWindowClient:
                 print(f"[DBG] Control frame: type={frame_type.name}, len={len(frame_data)-1}, data={frame_data[1:].hex()}")
             return frame_type, None, bytes(frame_data[1:])
         
-        # Parse data packet
-        if len(frame_data) < 16:  # Minimum packet size
+        # Parse data frame
+        if len(frame_data) < 16:  # Minimum frame size
             return None, None, None
         
         try:
@@ -378,7 +378,7 @@ class SlidingWindowClient:
                 self.send_nack()
                 return None, None, None
             
-            packet = Packet(
+            frame = Frame(
                 flags=flags,
                 frame_index=frame_index,
                 seq_length=seq_length,
@@ -390,10 +390,10 @@ class SlidingWindowClient:
                 crc=crc_received
             )
             
-            self.stats['packets_received'] += 1
+            self.stats['frames_received'] += 1
             if getattr(self, 'debug', False):
                 print(f"[DBG] Data frame: frame_idx={frame_index}, len={data_length}, enc={encoding_type}, token=0x{token:04X}")
-            return FrameType.DATA, packet, None
+            return FrameType.DATA, frame, None
             
         except struct.error as e:
             print(f"✗ Parse error: {e}")
@@ -402,11 +402,11 @@ class SlidingWindowClient:
     def send_message(self, message: str, encoding_type: int = ENCODING_ASCII):
         """Send a text message and wait for echo response."""
         data = message.encode('utf-8')
-        packet = self._send_and_wait(data, encoding_type)
-        if packet is None:
+        frame = self._send_and_wait(data, encoding_type)
+        if frame is None:
             return None
 
-        echo_text = packet.data.decode('utf-8', errors='replace')
+        echo_text = frame.data.decode('utf-8', errors='replace')
         print(f"← Received echo: '{echo_text}'")
 
         if echo_text == message:
@@ -417,16 +417,16 @@ class SlidingWindowClient:
 
     def send_payload(self, payload: bytes, encoding_type: int = ENCODING_BINARY):
         """Send raw payload bytes and wait for echo response."""
-        packet = self._send_and_wait(payload, encoding_type)
-        if packet is None:
+        frame = self._send_and_wait(payload, encoding_type)
+        if frame is None:
             return None
 
-        print(f"← Received echo ({len(packet.data)} bytes)")
-        if packet.data == payload:
+        print(f"← Received echo ({len(frame.data)} bytes)")
+        if frame.data == payload:
             print("✓ Echo matches!")
         else:
-            print(f"✗ Echo mismatch! Sent {len(payload)} bytes, received {len(packet.data)} bytes.")
-        return packet.data
+            print(f"✗ Echo mismatch! Sent {len(payload)} bytes, received {len(frame.data)} bytes.")
+        return frame.data
 
     def send_payload_sequence(
         self,
@@ -434,7 +434,7 @@ class SlidingWindowClient:
         encoding_type: int = ENCODING_BINARY,
         chunk_size: Optional[int] = None,
     ):
-        """Send a payload that spans multiple packets."""
+        """Send a payload that spans multiple frames."""
         total_size = len(payload)
         if total_size == 0:
             print("Payload is empty; nothing to send.")
@@ -450,25 +450,25 @@ class SlidingWindowClient:
         if chunk_size <= 0:
             raise ValueError("Chunk size must be positive")
 
-        total_packets = math.ceil(total_size / chunk_size)
+        total_frames = math.ceil(total_size / chunk_size)
         start_frame_index = self._next_frame_index
         frame_index = start_frame_index
 
-        print(f"→ Sending sequence of {total_packets} packets ({total_size} bytes total, chunk={chunk_size})")
-        for index in range(total_packets):
+        print(f"→ Sending sequence of {total_frames} frames ({total_size} bytes total, chunk={chunk_size})")
+        for index in range(total_frames):
             start = index * chunk_size
             end = min(start + chunk_size, total_size)
             chunk = payload[start:end]
-            flags = FLAG_LAST_PACKET if index == (total_packets - 1) else 0
-            self.send_packet(
+            flags = FLAG_LAST_FRAME if index == (total_frames - 1) else 0
+            self.send_frame(
                 chunk,
                 flags=flags,
                 encoding_type=encoding_type,
                 frame_index=frame_index,
-                seq_length=total_packets,
+                seq_length=total_frames,
                 seq_size=total_size,
             )
-            frame_index = (frame_index + 1) % MAX_SEQ_NUM
+            frame_index = (frame_index + 1) % MAX_FRAME_INDEX
 
         self._next_frame_index = frame_index
 
@@ -476,51 +476,51 @@ class SlidingWindowClient:
         start_time = time.time()
         received_chunks = {}
         recv_start_frame_index: Optional[int] = None
-        expected_packets: Optional[int] = None
+        expected_frames: Optional[int] = None
         expected_size = total_size
         collected_size = 0
-        last_packet_seen = False
+        last_frame_seen = False
         timed_out = True
 
         while (time.time() - start_time) < (self.conn_timeout_ms / 1000.0):
-            frame_type, packet, ctrl_data = self.receive_frame()
+            frame_type, frame, ctrl_data = self.receive_frame()
 
-            if frame_type == FrameType.DATA and packet:
+            if frame_type == FrameType.DATA and frame:
                 if recv_start_frame_index is None:
-                    recv_start_frame_index = packet.frame_index
+                    recv_start_frame_index = frame.frame_index
 
-                if expected_packets is None and packet.seq_length:
-                    expected_packets = packet.seq_length
-                    reported_size = packet.seq_size or expected_size
+                if expected_frames is None and frame.seq_length:
+                    expected_frames = frame.seq_length
+                    reported_size = frame.seq_size or expected_size
                     expected_size = max(expected_size, reported_size)
-                    print(f"  Remote reports sequence length {expected_packets}, total size {expected_size} bytes")
-                elif packet.seq_size:
-                    expected_size = max(expected_size, packet.seq_size)
+                    print(f"  Remote reports frame count {expected_frames}, total size {expected_size} bytes")
+                elif frame.seq_size:
+                    expected_size = max(expected_size, frame.seq_size)
 
                 bucket = 0
                 if recv_start_frame_index is not None:
-                    bucket = ((packet.frame_index - recv_start_frame_index) + MAX_SEQ_NUM) % MAX_SEQ_NUM
+                    bucket = ((frame.frame_index - recv_start_frame_index) + MAX_FRAME_INDEX) % MAX_FRAME_INDEX
 
-                if packet.frame_index in received_chunks:
-                    print(f"← Duplicate data packet frame_idx={packet.frame_index}")
-                    self.send_ack(packet.frame_index, window_frames=0x01)
+                if frame.frame_index in received_chunks:
+                    print(f"← Duplicate data frame frame_idx={frame.frame_index}")
+                    self.send_ack(frame.frame_index, window_frames=0x01)
                     continue
 
-                if expected_packets is not None and bucket >= expected_packets:
-                    print(f"← Unexpected frame_idx {packet.frame_index}; outside expected window (0..{expected_packets - 1})")
-                    self.send_ack(packet.frame_index, window_frames=0x01)
+                if expected_frames is not None and bucket >= expected_frames:
+                    print(f"← Unexpected frame_idx {frame.frame_index}; outside expected window (0..{expected_frames - 1})")
+                    self.send_ack(frame.frame_index, window_frames=0x01)
                     continue
 
-                received_chunks[packet.frame_index] = packet.data
-                collected_size += len(packet.data)
-                if packet.flags & FLAG_LAST_PACKET:
-                    last_packet_seen = True
-                self.send_ack(packet.frame_index, window_frames=0x01)
+                received_chunks[frame.frame_index] = frame.data
+                collected_size += len(frame.data)
+                if frame.flags & FLAG_LAST_FRAME:
+                    last_frame_seen = True
+                self.send_ack(frame.frame_index, window_frames=0x01)
 
-                have_all_packets = expected_packets is not None and len(received_chunks) >= expected_packets
+                have_all_frames = expected_frames is not None and len(received_chunks) >= expected_frames
                 have_all_bytes = collected_size >= expected_size
 
-                if have_all_bytes and (have_all_packets or expected_packets is None or last_packet_seen):
+                if have_all_bytes and (have_all_frames or expected_frames is None or last_frame_seen):
                     timed_out = False
                     break
 
@@ -536,14 +536,14 @@ class SlidingWindowClient:
 
         if timed_out:
             received_count = len(received_chunks)
-            print(f"✗ Timeout waiting for full echo sequence ({collected_size}/{expected_size} bytes, {received_count}/{expected_packets or 'unknown'} packets received)")
+            print(f"✗ Timeout waiting for full echo sequence ({collected_size}/{expected_size} bytes, {received_count}/{expected_frames or 'unknown'} frames received)")
             self.stats['timeouts'] += 1
             return None
 
-        # Reassemble in sequence order relative to the first sequence number observed
-        ordered_seqs = sorted(received_chunks.keys(), key=lambda s: ((s - (recv_start_frame_index or s)) + MAX_SEQ_NUM) % MAX_SEQ_NUM)
-        reassembled = b''.join(received_chunks[seq] for seq in ordered_seqs)
-        print(f"← Received sequence ({len(reassembled)} bytes across {len(ordered_seqs)} packets)")
+        # Reassemble in frame order relative to the first frame index observed
+        ordered_frames = sorted(received_chunks.keys(), key=lambda s: ((s - (recv_start_frame_index or s)) + MAX_FRAME_INDEX) % MAX_FRAME_INDEX)
+        reassembled = b''.join(received_chunks[frame_index] for frame_index in ordered_frames)
+        print(f"← Received sequence ({len(reassembled)} bytes across {len(ordered_frames)} frames)")
         if reassembled == payload:
             print("✓ Echo matches!")
         else:
@@ -554,8 +554,8 @@ class SlidingWindowClient:
         """Print connection statistics."""
         print("\n" + "="*60)
         print("Statistics:")
-        print(f"  Packets sent:     {self.stats['packets_sent']}")
-        print(f"  Packets received: {self.stats['packets_received']}")
+        print(f"  Frames sent:      {self.stats['frames_sent']}")
+        print(f"  Frames received:  {self.stats['frames_received']}")
         print(f"  ACKs sent:        {self.stats['acks_sent']}")
         print(f"  NACKs sent:       {self.stats['nacks_sent']}")
         print(f"  CRC errors:       {self.stats['crc_errors']}")
@@ -574,7 +574,7 @@ def main():
     parser.add_argument('--json', dest='json_payload', nargs='+', help='Send a single JSON payload and exit (accepts multiple tokens)')
     parser.add_argument('--json-file', dest='json_file', help='Send JSON loaded from a file and exit')
     parser.add_argument('--payload-file', dest='payload_file', help='Send raw payload bytes from a file and exit')
-    parser.add_argument('--chunk-size', type=int, help='Override per-packet payload size when splitting sequences')
+    parser.add_argument('--chunk-size', type=int, help='Override per-frame payload size when splitting sequences')
     parser.add_argument('--debug', action='store_true', help='Enable verbose frame parsing logs')
     parser.add_argument('--message', dest='message', help='Send a single text message and exit')
     parser.add_argument('--target', choices=sorted(TARGET_PROFILES.keys()), default='uno',
