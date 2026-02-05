@@ -33,7 +33,7 @@
 // #############################################################################
 
 #define WINDOW_SIZE           SWP_WINDOW_SIZE
-#define MAX_SEQ_NUM           65536
+#define MAX_FRAME_INDEX       65536
 #define MAX_DATA_SIZE         SWP_MAX_DATA_SIZE
 #define TIMEOUT_MS            SWP_TIMEOUT_MS
 #define MAX_RETRANSMIT_COUNT  5
@@ -43,16 +43,16 @@
 #define ACK                   0x06
 #define NACK                  0x15
 #define RESET_FRAME           0x55
-#define FLAG_LAST_PACKET      0x01
-#define FLAG_SIGN             0x02                  // where the last bit is reserved for last packet = 0x03
-#define FLAG_STARDOME_ATTESTATION 0x04    // where the last bit is reserved for last packet = 0x05
-#define FLAG_STARDOME_TREE    0x26         // where the last bit is reserved for last packet = 0x27
-#define FLAG_STARDOME_DATA         0x08              // where the last bit is reserved for last packet = 0x09
-#define FLAG_STARDOME_SN      0x0C           // where the last bit is reserved for last packet = 0x0D
-#define FLAG_STATUS           0x0E                // where the last bit is reserved for last packet = 0x0F
-#define FLAG_STARDOME_STATUS  0x10       // where the last bit is reserved for last packet = 0x11
-#define FLAG_CRYPTO           0x12                // where the last bit is reserved for last packet = 0x13
-#define FLAG_STARDOME_CRYPTO  0x34       // where the last bit is reserved for last packet = 0x35
+#define FLAG_LAST_FRAME      0x01
+#define FLAG_SIGN             0x02                  // where the last bit is reserved for last frame = 0x03
+#define FLAG_STARDOME_ATTESTATION 0x04    // where the last bit is reserved for last frame = 0x05
+#define FLAG_STARDOME_TREE    0x26         // where the last bit is reserved for last frame = 0x27
+#define FLAG_STARDOME_DATA         0x08              // where the last bit is reserved for last frame = 0x09
+#define FLAG_STARDOME_SN      0x0C           // where the last bit is reserved for last frame = 0x0D
+#define FLAG_STATUS           0x0E                // where the last bit is reserved for last frame = 0x0F
+#define FLAG_STARDOME_STATUS  0x10       // where the last bit is reserved for last frame = 0x11
+#define FLAG_CRYPTO           0x12                // where the last bit is reserved for last frame = 0x13
+#define FLAG_STARDOME_CRYPTO  0x34       // where the last bit is reserved for last frame = 0x35
 
 // Byte stuffing / framing characters
 #define FRAME_BYTE      0x7E  // Marks start and end of a frame
@@ -83,28 +83,28 @@
 // ## Data Structures
 // #############################################################################
 
-// Enhanced packet structure with encoding type identifier
+// Enhanced frame structure with encoding type identifier
 typedef struct {
     uint8_t flags;
-    uint16_t seq;
-    uint16_t seq_length;     // Total number of packets in sequence
+    uint16_t frame_index;
+    uint16_t seq_length;     // Total number of frames in sequence
     uint32_t seq_size;       // Total amount of DATA to be sent in sequence
-    uint16_t data_length;    // Length of data in this packet
+    uint16_t data_length;    // Length of data in this frame
     uint8_t encoding_type;   // Data encoding type identifier
     uint8_t data[MAX_DATA_SIZE]; // Variable-size data payload
     uint16_t token;
     uint16_t crc;            // CRC-16 checksum for error detection
-} Packet;
+} Frame;
 
 // Receiver buffer slot
 typedef struct {
-    Packet pkt;
+    Frame frame;
     bool received;
 } BufferSlot;
 
 // Enhanced sender buffer slot with MIN-inspired features
 typedef struct {
-    Packet pkt;
+    Frame frame;
     bool sent;
     bool acked;
     uint32_t last_sent_time_ms;    // MIN-inspired: timeout tracking
@@ -169,8 +169,8 @@ uint8_t uart_receive_byte(void);
 bool uart_RX_available(void);
 
 uint32_t millis(void);
-// Public wrapper: send a single-packet payload that matches the Packet structure
-// The sliding-window will set internal seq and token.
+// Public wrapper: send a single-frame payload that matches the Frame structure
+// The sliding-window will set internal frame_index and token.
 void sliding_window_send_payload(const uint8_t *data, uint16_t len, uint8_t flags, uint8_t encoding_type);
 
 #endif // SLIDING_WINDOW_PROTOCOL_16BIT_H

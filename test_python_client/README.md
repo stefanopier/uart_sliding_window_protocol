@@ -4,7 +4,7 @@ Python-based serial test client for the MCU sliding window protocol implementati
 
 ## Features
 
-- ✅ Full sliding window protocol with 16-bit sequence numbers
+- ✅ Full sliding window protocol with 16-bit frame indices
 - ✅ CRC-16-CCITT error detection
 - ✅ Byte stuffing/unstuffing for frame delimiting (0x7E, 0x7D)
 - ✅ SACK (Selective Acknowledgment) support
@@ -37,7 +37,7 @@ Common flags:
 - `--json '{...}'` – send a one-off JSON payload supplied inline.
 - `--json-file path/to/payload.json` – load JSON from a file.
 - `--payload-file path/to/payload.bin` – stream raw payload bytes from disk (no encoding assumptions).
-- `--chunk-size 512` – force a specific per-packet payload when splitting sequences.
+- `--chunk-size 512` – force a specific per-frame payload when splitting sequences.
 - `--debug` – dump raw TX/RX frames and parser details.
 - `--timeout-ms 500` / `--conn-timeout-ms 10000` – tweak per-byte and overall timeouts (defaults match the UNO sketch).
 - `--target generic` – switch to the generic MCU profile (full protocol payload size, no boot delay).
@@ -96,7 +96,7 @@ Once connected, use these commands:
 ```
 $ python sliding_window_client.py --port COM10 --baud 115200 --json-file payload.json
 ✓ Connected to COM10 at 115200 baud
-→ Sent packet seq=0, len=44, frame_bytes=64, preview='{
+→ Sent frame frame_idx=0, len=44, frame_bytes=64, preview='{
   "msg": "Lorem ipsum dolo…'
   Waiting for echo response...
 ← Received ACK
@@ -107,8 +107,8 @@ $ python sliding_window_client.py --port COM10 --baud 115200 --json-file payload
 
 ============================================================
 Statistics:
-  Packets sent:     1
-  Packets received: 1
+  Frames sent:     1
+  Frames received: 1
   ACKs sent:        1
   NACKs sent:       0
   CRC errors:       0
@@ -126,7 +126,7 @@ To exercise the MCU at its maximum payload size (1,024 bytes by default), use th
 $ python sliding_window_client.py --port COM10 --baud 115200 --payload-file payload_1024 --target generic
 ✓ Connected to COM10 at 115200 baud
 Loaded raw payload: 1024 bytes from payload_1024
-→ Sent packet seq=0, len=1024, frame_bytes=1040, preview='\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f…'
+→ Sent frame frame_idx=0, len=1024, frame_bytes=1040, preview='\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f…'
   Waiting for echo response...
 ← Received echo (1024 bytes)
 ✓ Echo matches!
@@ -145,18 +145,18 @@ Statistics:
 
 ### Sliding-window sequence test
 
-When the payload exceeds the configured per-packet limit (or when you supply `--chunk-size`), the client automatically splits data across multiple frames and reassembles the echoed response. Example with two 512-byte chunks:
+When the payload exceeds the configured per-frame limit (or when you supply `--chunk-size`), the client automatically splits data across multiple frames and reassembles the echoed response. Example with two 512-byte chunks:
 
 ```
 $ python sliding_window_client.py --port COM10 --baud 115200 --payload-file payload_1024 --chunk-size 512 --target generic
 ✓ Connected to COM10 at 115200 baud
 Loaded raw payload: 1024 bytes from payload_1024
 → Sending sequence of 2 packets (1024 bytes total, chunk=512)
-→ Sent packet seq=0/2, len=512, frame_bytes=528, preview='\x00\x01\x02\x03\x04\x05\x06\x07…'
-→ Sent packet seq=1/2, len=512, frame_bytes=528, preview='\x80\x81\x82\x83\x84\x85\x86\x87…'
+→ Sent frame frame_idx=0/2, len=512, frame_bytes=528, preview='\x00\x01\x02\x03\x04\x05\x06\x07…'
+→ Sent frame frame_idx=1/2, len=512, frame_bytes=528, preview='\x80\x81\x82\x83\x84\x85\x86\x87…'
   Waiting for echo sequence...
-→ Sent ACK seq_base=0, bitmap=0x01
-→ Sent ACK seq_base=1, bitmap=0x01
+→ Sent ACK sack_base=0, window_frames=0x01
+→ Sent ACK sack_base=1, window_frames=0x01
 ← Received sequence (1024 bytes across 2 packets)
 ✓ Echo matches!
 
@@ -176,7 +176,7 @@ Statistics:
 $ python sliding_window_client.py --port COM10 --baud 115200 --json-file payload.json --debug
 ✓ Connected to COM10 at 115200 baud
 [DBG RAW TX] 7e01000001002c0000002c00027b0a20202020226d7367223a20224c6f72656d20697073756d20646f6c6f722073697420616d65742c220a7d5dcdab219f7e
-→ Sent packet seq=0, len=44, frame_bytes=64, preview='{
+→ Sent frame frame_idx=0, len=44, frame_bytes=64, preview='{
     "msg": "Lorem ipsum dolo…'
   Waiting for echo response...
 [DBG RAW RX] 0x7E
@@ -189,12 +189,12 @@ $ python sliding_window_client.py --port COM10 --baud 115200 --json-file payload
 ...
 [DBG RAW RX] 0x7E
 [DBG RAW FRAME] 01010001002c0000002c00017b0a20202020226d7367223a20224c6f72656d20697073756d20646f6c6f722073697420616d65742c220a7dcdabc346
-[DBG] Data frame: seq=1, len=44, enc=1, token=0xABCD
+[DBG] Data frame: frame_idx=1, len=44, enc=1, token=0xABCD
 ← Received echo: '{
     "msg": "Lorem ipsum dolor sit amet,"
 }'
 [DBG RAW TX] 7e060001017e
-→ Sent ACK seq_base=1, bitmap=0x01
+→ Sent ACK sack_base=1, window_frames=0x01
 ✓ Echo matches!
 
 ============================================================
@@ -216,7 +216,7 @@ Statistics:
 ```
 PC Client                          MCU
     |                               |
-    |---[DATA: "Hello"]------------>|  (framed packet with CRC)
+    |---[DATA: "Hello"]------------>|  (framed payload with CRC)
     |                               |
     |                               |  (validate CRC, decode payload)
     |                               |
@@ -226,7 +226,7 @@ PC Client                          MCU
     |                               |
 ```
 
-### Packet Structure
+### Frame Structure
 
 ```
 ┌──────────────┬────────────────────┬──────────────┐
@@ -237,11 +237,11 @@ PC Client                          MCU
 
 **Escaped Data Content:**
 ```c
-flags         (1 byte)  // FLAG_LAST_PACKET = 0x01
-seq           (2 bytes) // Sequence number
-seq_length    (2 bytes) // Total packets in sequence
+flags         (1 byte)  // FLAG_LAST_FRAME = 0x01
+frame_index   (2 bytes) // Frame index within the sequence (16-bit, wraps)
+seq_length    (2 bytes) // Total frames in sequence
 seq_size      (4 bytes) // Total data size
-data_length   (2 bytes) // Length of data in this packet
+data_length   (2 bytes) // Length of data in this frame
 encoding_type (1 byte)  // ENCODING_ASCII = 0x01
 data          (variable)// Actual payload
 token         (2 bytes) // Security token (0xABCD)
@@ -262,7 +262,7 @@ Special characters are escaped to avoid confusion with frame delimiters:
 - **Algorithm:** CRC-16-CCITT
 - **Polynomial:** 0x1021
 - **Initial Value:** 0xFFFF
-- **Computed Over:** All packet fields except CRC itself
+- **Computed Over:** All frame fields except CRC itself
 
 ## Protocol Details
 
@@ -380,7 +380,7 @@ When modifying the protocol:
 1. Update both MCU (`sliding_window_protocol_16bit.c`) and Python client
 2. Maintain CRC-16 compatibility
 3. Test byte stuffing edge cases (0x7E, 0x7D in payload)
-4. Verify sequence number wrapping at 65536
+4. Verify frame index wrapping at 65536
 
 ## License
 

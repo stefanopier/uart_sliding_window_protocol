@@ -73,9 +73,9 @@ Important constants in the header:
 
 Note: The `SWP_*` prefix denotes Sliding Window Protocol-related defines.
 
-Flags used in packet `flags` byte (some are project-specific):
+Flags used in frame `flags` byte (some are project-specific):
 
-`FLAG_LAST_PACKET` is a marker bit (0x01) that may be OR’d into the base flag to indicate the final fragment of a sequence. All other flag values below are base types; OR with `FLAG_LAST_PACKET` when needed.
+`FLAG_LAST_FRAME` is a marker bit (0x01) that may be OR’d into the base flag to indicate the final fragment of a sequence. All other flag values below are base types; OR with `FLAG_LAST_FRAME` when needed.
 
 ### Stardome flags (base values)
 
@@ -98,7 +98,7 @@ Flags used in packet `flags` byte (some are project-specific):
 
 ### Error response flags
 
-Error responses use a base error flag and a 1-byte payload error code. The error flag is OR’d with `FLAG_LAST_PACKET` when sent.
+Error responses use a base error flag and a 1-byte payload error code. The error flag is OR’d with `FLAG_LAST_FRAME` when sent.
 
 | Error flag | Value (hex) | Applies to |
 |-----------|-------------|------------|
@@ -138,7 +138,7 @@ SACK bitmap example (WINDOW_SIZE=8): bitmap bit 0 corresponds to `base_seq`, bit
 - `init_sliding_window_protocol()` — resets internal state.
 - `reliable_send_buffered(const uint8_t *data, uint16_t total_len)` — block until all payload sent and acked.
 - `reliable_send_buffered_with_encoding(...)` — like above with an encoding type param.
-- `reliable_receive_buffered(uint8_t *output, volatile uint16_t *output_len)` — accumulate packets into `output` until `FLAG_LAST_PACKET` is seen.
+- `reliable_receive_buffered(uint8_t *output, volatile uint16_t *output_len)` — accumulate frames into `output` until `FLAG_LAST_FRAME` is seen.
 - `receive_decoded_frame(...)` — non-blocking helper to decode a single incoming frame and return its payload.
 - `get_connection_statistics(ConnectionState *stats)` — retrieve counters used for debugging/telemetry.
 - `reset_connection_statistics()` — zero out statistics.
