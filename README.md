@@ -41,7 +41,7 @@ Byte-stuffing characters:
 - `ESCAPE_CHAR = 0x7D`
 - `STUFF_BYTE = 0x20` (XOR mask) — the receiver XORs escaped bytes with `STUFF_BYTE` to recover the original.
 
-Control frames are single control bytes inside a frame (ACK, NACK, RESET) and may be followed by control data and framing.
+Control frames are single control bytes inside a frame (ACK, NACK, RESET) and may be followed by control data and framing. Some error paths may also emit a raw `RESET_FRAME` byte (0x55) without framing as an emergency reset signal; peers that support this should treat a lone 0x55 as an out-of-band reset.
 
 ---
 
@@ -98,7 +98,7 @@ Flags used in frame `flags` byte (some are project-specific):
 
 ### Error response flags
 
-Error responses use a base error flag and a 1-byte payload error code. The error flag is OR’d with `FLAG_LAST_FRAME` when sent.
+Error responses use a base error flag and a 1-byte payload error code. The error flag is OR’d with `FLAG_LAST_FRAME` when sent. In some internal error paths (e.g., SIGN handler failure), the implementation may send a generic 1-byte error payload with only `FLAG_LAST_FRAME` set (no specific error flag).
 
 | Error flag | Value (hex) | Applies to |
 |-----------|-------------|------------|
