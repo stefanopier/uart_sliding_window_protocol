@@ -399,6 +399,10 @@ const char* get_encoding_type_name(uint8_t encoding_type) {
 // #############################################################################
 
 // CRC-16 calculation (CRC-16-CCITT, polynomial 0x1021)
+// When SWP_PLATFORM_EXTENSIONS is active, crc16_ccitt_update is provided via
+// swp_internal.h as static inline, so we skip the local copy to avoid a
+// redefinition error in the same translation unit.
+#ifndef SWP_PLATFORM_EXTENSIONS
 static inline uint16_t crc16_ccitt_update(uint16_t crc, uint8_t data) {
     crc ^= ((uint16_t)data << 8);
 
@@ -412,6 +416,7 @@ static inline uint16_t crc16_ccitt_update(uint16_t crc, uint8_t data) {
 
     return crc;
 }
+#endif
 
 SWP_INTERNAL uint16_t compute_crc16(const uint8_t *data, uint16_t len) {
     uint16_t crc = 0xFFFF;  // Initial value

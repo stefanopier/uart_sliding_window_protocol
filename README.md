@@ -243,7 +243,7 @@ This header (shipped alongside the protocol files) provides:
 - The `FrameType` enum (used by both the `.c` and the wrapper)
 - `extern` declarations for the 6 internal state variables
 - Prototypes for the exposed helper functions
-- A `static inline` copy of `crc16_ccitt_update()` (each TU gets its own inlined copy)
+- A `static inline` copy of `crc16_ccitt_update()` (the `.c` guards its own copy with `#ifndef SWP_PLATFORM_EXTENSIONS` to avoid redefinition; each TU gets exactly one inlined copy)
 - Prototypes for the two weak hooks
 
 Include it from your wrapper `.c` only — never from application code.
