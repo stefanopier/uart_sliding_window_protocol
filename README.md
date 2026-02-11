@@ -41,7 +41,7 @@ Byte-stuffing characters:
 - `ESCAPE_CHAR = 0x7D`
 - `STUFF_BYTE = 0x20` (XOR mask) — the receiver XORs escaped bytes with `STUFF_BYTE` to recover the original.
 
-Control frames are single control bytes inside a frame (ACK, NACK, RESET) and may be followed by control data and framing.
+Control frames are single control bytes inside a frame (ACK, NACK, RESET) and may be followed by control data and framing. Some error paths may also emit a raw `RESET_FRAME` byte (0x55) without framing as an emergency reset signal; peers that support this should treat a lone 0x55 as an out-of-band reset.
 
 ---
 
@@ -98,7 +98,7 @@ Flags used in frame `flags` byte (some are project-specific):
 
 ### Error response flags
 
-Error responses use a base error flag and a 1-byte payload error code. The error flag is OR’d with `FLAG_LAST_FRAME` when sent.
+Error responses use a base error flag and a 1-byte payload error code. The error flag is OR’d with `FLAG_LAST_FRAME` when sent. In some internal error paths (e.g., SIGN handler failure), the implementation may send a generic 1-byte error payload with only `FLAG_LAST_FRAME` set (no specific error flag).
 
 | Error flag | Value (hex) | Applies to |
 |-----------|-------------|------------|
@@ -138,10 +138,26 @@ SACK bitmap example (WINDOW_SIZE=8): bitmap bit 0 corresponds to `base_seq`, bit
 - `init_sliding_window_protocol()` — resets internal state.
 - `reliable_send_buffered(const uint8_t *data, uint16_t total_len)` — block until all payload sent and acked.
 - `reliable_send_buffered_with_encoding(...)` — like above with an encoding type param.
-- `reliable_receive_buffered(uint8_t *output, volatile uint16_t *output_len)` — accumulate frames into `output` until `FLAG_LAST_FRAME` is seen.
+- `reliable_receive_buffered(uint8_t *output, volatile uint16_t *output_len, uint16_t output_max)` — accumulate frames into `output` until `FLAG_LAST_FRAME` is seen. `output_max` bounds-checks the buffer to prevent overflow.
 - `receive_decoded_frame(...)` — non-blocking helper to decode a single incoming frame and return its payload.
 - `get_connection_statistics(ConnectionState *stats)` — retrieve counters used for debugging/telemetry.
 - `reset_connection_statistics()` — zero out statistics.
+- `reset_sliding_window_receiver()` — clear only receiver state (expected frame index and reorder buffer). Use between independent receive transactions.
+- `reset_sliding_window_after_tx(uint32_t timeout_ms)` — drain the TX window (wait for ACKs), then full-reset transport state. Returns `true` if all frames were acked before timeout.
+- `send_error_response(uint8_t error_flag, uint8_t error_code)` — send a single-byte error payload with flags = `error_flag | FLAG_LAST_FRAME`.
+
+### Transaction lifecycle
+
+For multi-request servers or devices handling consecutive sequences:
+
+1. Call `init_sliding_window_protocol()` once at startup.
+2. Receive a request via `reliable_receive_buffered()`.
+3. Send a response via `reliable_send_buffered()` or `sliding_window_send_fragmented()`.
+4. Call `reset_sliding_window_after_tx(CONNECTION_TIMEOUT_MS)` to drain ACKs and prepare for the next transaction.
+5. Call `reset_sliding_window_receiver()` if you need to accept a new inbound sequence starting at idx=0.
+6. Go to step 2.
+
+Without explicit resets, the receiver will auto-reset when `frame_index=0` arrives while expecting a different index. However, explicit resets are recommended for clarity and to ensure sender state is also cleaned up.
 
 Note: The receiver and sender expect the platform to implement these hooks in user code:
 
@@ -149,6 +165,7 @@ Note: The receiver and sender expect the platform to implement these hooks in us
 - `uint8_t uart_receive_byte(void)` — read a byte from RX.
 - `bool uart_RX_available(void)` — non-blocking; returns whether the serial buffer has >=1 byte ready.
 - `uint32_t millis(void)` — millisecond clock for timeout handling.
+- `void uart_flush_tx(void)` — (optional) block until all queued TX bytes have been physically transmitted. Default weak implementation is a no-op.
 
 ---
 
@@ -188,6 +205,87 @@ Examples from the UNO test header:
 ```
 
 Additionally the UNO test uses small debug pulses via `swp_debug_pulse(code)` and flush via `uart_flush()` to make behavior visible during development over USB-CDC. Keep these if you need runtime instrumentation but remove them in production builds for minimal footprint.
+
+---
+
+## Platform extensions (wrapper pattern) 🔧
+
+The protocol implementation keeps all internal state and helper functions `static` (file-private) by default. For platforms that need to extend the protocol — e.g., interleaving RX drain during TX, adding hooks on reset or NACK, or implementing streamed/incremental receive — a compile-time opt-in flag exposes the necessary internals.
+
+### Enabling
+
+Add `-DSWP_PLATFORM_EXTENSIONS` (or `#define SWP_PLATFORM_EXTENSIONS` before including the `.c`) to your build. This:
+
+1. Makes internal state variables non-static (`recv_window`, `send_window`, `conn_state`, sequence indices), accessible via `extern` declarations in `swp_internal.h`.
+2. Makes ~10 internal helper functions non-static (`send_escaped_byte`, `receive_any_frame_timed`, `store_frame`, `send_sack_ack`, `send_nack`, `handle_sack_ack`, `check_timeouts_and_retransmit`, `handle_nack_retransmit`, `handle_reset_frame`, `compute_crc16`), so a wrapper translation unit can call them.
+3. Makes `send_frame_struct()` a weak symbol (`__attribute__((weak))`), so a wrapper can provide a strong override (e.g., to add per-byte TX pump for DMA coexistence).
+4. Activates two hook call-sites with weak no-op defaults:
+   - `swp_hook_on_reset()` — called at the end of `handle_reset_frame()`. Override to clear platform-specific state (e.g., QSPI drain buffers).
+   - `swp_hook_post_nack()` — called after `send_nack()` sends the NACK frame. Override for post-NACK RX drain.
+5. Moves the internal `FrameType` enum to `swp_internal.h` (guarded to avoid redefinition).
+
+**Without the flag, the module behaves identically to previous versions** — all symbols remain `static`, no hooks are called, no weak attributes.
+
+### Required files for a wrapper project
+
+```
+your_project/
+  sliding_window_protocol_16bit.h   ← public API (unmodified copy)
+  sliding_window_protocol_16bit.c   ← protocol implementation (unmodified copy)
+  swp_internal.h                    ← internal declarations header
+  swp_yourplatform_wrapper.h        ← platform-specific public API
+  swp_yourplatform_wrapper.c        ← platform-specific extensions
+```
+
+### swp_internal.h
+
+This header (shipped alongside the protocol files) provides:
+- The `FrameType` enum (used by both the `.c` and the wrapper)
+- `extern` declarations for the 6 internal state variables
+- Prototypes for the exposed helper functions
+- A `static inline` copy of `crc16_ccitt_update()` (the `.c` guards its own copy with `#ifndef SWP_PLATFORM_EXTENSIONS` to avoid redefinition; each TU gets exactly one inlined copy)
+- Prototypes for the two weak hooks
+
+Include it from your wrapper `.c` only — never from application code.
+
+### Writing a platform wrapper
+
+A wrapper `.c` file links alongside the unmodified protocol `.c`. It can:
+
+- **Override `send_frame_struct()`** — provide a strong definition that replaces the weak default. Example: interleave per-byte RX pump calls during TX to prevent DMA overflow on MCUs with shared UART/DMA channels.
+- **Override `swp_hook_on_reset()`** — provide a strong definition to clear domain-specific state on protocol reset.
+- **Override `swp_hook_post_nack()`** — provide a strong definition to drain RX after sending NACK.
+- **Add new receive modes** — e.g., `reliable_receive_streamed()` that uses a frame-sink callback instead of accumulating into a flat buffer, enabling payloads larger than RAM.
+- **Add cooperative polling** — e.g., `sliding_window_protocol_tasks()` for non-blocking main-loop integration.
+
+Example wrapper skeleton:
+
+```c
+// swp_myplatform_wrapper.c
+#include "swp_myplatform_wrapper.h"
+#include "swp_internal.h"
+
+// Strong override: custom send with TX pump
+void send_frame_struct(Frame *frame) {
+    // ... your platform-specific frame sending logic
+}
+
+// Strong override: clear platform state on reset
+void swp_hook_on_reset(void) {
+    my_platform_reset_buffers();
+}
+
+// Strong override: drain RX after NACK
+void swp_hook_post_nack(void) {
+    my_platform_drain_rx();
+}
+```
+
+### Build integration
+
+For MPLAB X / XC32 projects, add `SWP_PLATFORM_EXTENSIONS=1` to the preprocessor macros in your project properties (or `configurations.xml`). For GCC/Make projects, add `-DSWP_PLATFORM_EXTENSIONS` to `CFLAGS`.
+
+Both the protocol `.c` and the wrapper `.c` must be compiled and linked. The linker resolves strong overrides over weak defaults automatically.
 
 ---
 
