@@ -1,7 +1,6 @@
 #include "sliding_window_protocol_16bit.h"
 #include <string.h>
 #include <stdio.h>
-#include <time.h>
 
 // #############################################################################
 // ## UART and System Dependencies (to be implemented by user)
@@ -30,6 +29,12 @@ __attribute__((weak)) bool uart_RX_available(void) {
 
 __attribute__((weak)) uint32_t millis(void) {
     return 0U;
+}
+
+// Optional TX flush hook. Platforms may override to block until the UART TX
+// hardware has physically transmitted all queued bytes.
+__attribute__((weak)) void uart_flush_tx(void) {
+    // Default: no-op
 }
 
 __attribute__((weak)) bool handle_flag_sign_frame(const uint8_t *data, uint16_t len) {
@@ -68,17 +73,20 @@ static uint16_t compute_crc16(const uint8_t *data, uint16_t len);
 static void send_escaped_byte(uint8_t byte);
 static void send_frame_struct(Frame *frame);
 static bool receive_any_frame(FrameType *type, Frame *frame, uint8_t *ctrl_data, uint8_t *ctrl_len);
+static bool receive_any_frame_timed(FrameType *type, Frame *frame, uint8_t *ctrl_data, uint8_t *ctrl_len,
+                                    uint32_t frame_start_timeout_ms, uint32_t byte_timeout_ms);
 static void store_frame(Frame *frame);
 static uint8_t generate_sack_window(void);
 static void send_sack_ack(void);
 static void send_nack(void);
-static void process_in_order_frames(uint8_t *output, uint16_t *output_len);
+static void process_in_order_frames(uint8_t *output, uint16_t *output_len, uint16_t output_max);
 static void init_connection_state(void);
 static void update_connection_activity(void);
 static bool is_connection_alive(void);
 static void prepare_and_send_frame(const uint8_t *data, uint16_t len, uint8_t flags, uint16_t total_frames, uint32_t total_size, uint8_t encoding_type);
 static void handle_sack_ack(uint16_t sack_base, uint8_t window_frames);
 static void check_timeouts_and_retransmit(void);
+static void handle_nack_retransmit(void);
 static void handle_reset_frame(void);
 static bool validate_frame_sequence(Frame *frame);
 
@@ -142,7 +150,8 @@ void reliable_send_buffered_with_encoding(const uint8_t *data, uint16_t total_le
                 uint8_t window_frames = ctrl_data[2];
                 handle_sack_ack(sack_base, window_frames);
             } else if (ftype == FRAME_TYPE_NACK) {
-                // Optional: could trigger more aggressive retransmission if desired
+                // Immediately retransmit all unacked frames
+                handle_nack_retransmit();
             } else if (ftype == FRAME_TYPE_RESET) {
                 handle_reset_frame();
             }
@@ -156,12 +165,12 @@ void reliable_send_buffered_with_encoding(const uint8_t *data, uint16_t total_le
     }
 }
 
-void reliable_receive_buffered(uint8_t *output, volatile uint16_t *output_len) {
+void reliable_receive_buffered(uint8_t *output, volatile uint16_t *output_len, uint16_t output_max) {
     uint8_t encoding_type; // Dummy variable
-    reliable_receive_buffered_with_encoding(output, output_len, &encoding_type);
+    reliable_receive_buffered_with_encoding(output, output_len, output_max, &encoding_type);
 }
 
-void reliable_receive_buffered_with_encoding(uint8_t *output, volatile uint16_t *output_len, uint8_t *encoding_type) {
+void reliable_receive_buffered_with_encoding(uint8_t *output, volatile uint16_t *output_len, uint16_t output_max, uint8_t *encoding_type) {
     *output_len = 0;          // writing to a volatile target is fine
     *encoding_type = ENCODING_BINARY;
     bool done = false;
@@ -188,7 +197,7 @@ void reliable_receive_buffered_with_encoding(uint8_t *output, volatile uint16_t 
             store_frame(&frame);
             send_sack_ack();
             uint16_t out_len_local = *output_len;
-            process_in_order_frames(output, &out_len_local);
+            process_in_order_frames(output, &out_len_local, output_max);
             *output_len = out_len_local;
             
             // If this frame requests signing, attempt to parse the assembled payload.
@@ -229,7 +238,8 @@ void reliable_receive_buffered_with_encoding(uint8_t *output, volatile uint16_t 
             uint8_t window_frames = ctrl_data[2];
             handle_sack_ack(sack_base, window_frames);
         } else if (ftype == FRAME_TYPE_NACK) {
-            // Optional: handle NACK on receiver side if needed
+            // Retransmit unacked frames on NACK (if we are also sending)
+            handle_nack_retransmit();
         } else if (ftype == FRAME_TYPE_RESET) {
             handle_reset_frame();
         }
@@ -272,6 +282,58 @@ void reset_connection_statistics(void) {
     conn_state.sequence_mismatch_drop = 0;
     conn_state.resets_received = 0;
     conn_state.max_window_usage = 0;
+}
+
+// Reset receiver state only (for multi-transaction scenarios).
+// Call when starting a new independent receive sequence to accept frames
+// starting at idx=0 again without disturbing sender state.
+void reset_sliding_window_receiver(void) {
+    for (int i = 0; i < WINDOW_SIZE; i++) {
+        recv_window[i].received = false;
+    }
+    expected_frame_index = 0;
+}
+
+// Drain TX window (wait for ACKs) then reset full transport state.
+// Returns true if all in-flight frames were ACKed before timeout.
+bool reset_sliding_window_after_tx(uint32_t timeout_ms) {
+    uint32_t start_ms = millis();
+    bool drained = false;
+
+    while (base_frame_index != next_frame_index) {
+        Frame rx_frame;
+        FrameType ftype;
+        uint8_t ctrl_data[16];
+        uint8_t ctrl_len = 0;
+
+        if (receive_any_frame_timed(&ftype, &rx_frame, ctrl_data, &ctrl_len, 0u, 50u)) {
+            if (ftype == FRAME_TYPE_ACK && ctrl_len >= 3) {
+                uint16_t sack_base = ((uint16_t)ctrl_data[0] << 8) | ctrl_data[1];
+                uint8_t window_frames = ctrl_data[2];
+                handle_sack_ack(sack_base, window_frames);
+            } else if (ftype == FRAME_TYPE_NACK) {
+                handle_nack_retransmit();
+            } else if (ftype == FRAME_TYPE_RESET) {
+                handle_reset_frame();
+                break;
+            }
+        }
+
+        check_timeouts_and_retransmit();
+
+        if ((millis() - start_ms) > timeout_ms) {
+            break;
+        }
+    }
+
+    drained = (base_frame_index == next_frame_index);
+    handle_reset_frame();
+    return drained;
+}
+
+// Send a one-byte error response with the given error flag.
+void send_error_response(uint8_t error_flag, uint8_t error_code) {
+    sliding_window_send_payload(&error_code, 1u, (uint8_t)(error_flag | FLAG_LAST_FRAME), ENCODING_BINARY);
 }
 
 bool is_valid_encoding_type(uint8_t encoding_type) {
@@ -410,21 +472,29 @@ static void send_frame_struct(Frame *frame) {
     send_escaped_byte((uint8_t)((crc >> 8) & 0xFF));
 
     uart_send_byte(FRAME_BYTE);
+
+    // Ensure the frame is fully pushed out on the wire before returning.
+    uart_flush_tx();
 }
 
 // Receive any frame (data or control) with timeout and byte-stuffing handling
 static bool receive_any_frame(FrameType *type, Frame *frame,
                               uint8_t *ctrl_data, uint8_t *ctrl_len) {
+    return receive_any_frame_timed(type, frame, ctrl_data, ctrl_len, 50, 100);
+}
+
+// Parameterized version with configurable timeouts
+static bool receive_any_frame_timed(FrameType *type, Frame *frame,
+                                    uint8_t *ctrl_data, uint8_t *ctrl_len,
+                                    uint32_t frame_start_timeout_ms, uint32_t byte_timeout_ms) {
     uint8_t byte;
     bool in_escape = false;
     uint32_t start_ms = millis();
     uint32_t last_byte_ms = start_ms;
-    const uint32_t BYTE_TIMEOUT_MS = 100;      // Timeout between bytes after frame start
-    const uint32_t FRAME_START_TIMEOUT_MS = 50; // Give up quickly if nothing is pending
 
     while (true) {
         if (!uart_RX_available()) {
-            if ((millis() - start_ms) > FRAME_START_TIMEOUT_MS) {
+            if ((millis() - start_ms) > frame_start_timeout_ms) {
                 return false;
             }
             continue;
@@ -439,7 +509,7 @@ static bool receive_any_frame(FrameType *type, Frame *frame,
 
     while (true) {
         if (!uart_RX_available()) {
-            if ((millis() - last_byte_ms) > BYTE_TIMEOUT_MS) {
+            if ((millis() - last_byte_ms) > byte_timeout_ms) {
                 return false;
             }
             continue;
@@ -460,7 +530,10 @@ static bool receive_any_frame(FrameType *type, Frame *frame,
         }
 
         if (byte == FRAME_BYTE) {
-            return false; // Empty frame
+            // Back-to-back 0x7E: treat as inter-frame padding (standard
+            // HDLC behaviour). Keep consuming delimiters until we see
+            // the first real content byte or time out.
+            continue;
         }
 
         break;
@@ -475,7 +548,7 @@ static bool receive_any_frame(FrameType *type, Frame *frame,
 
         while (bytes_received < sizeof(buffer)) {
             if (!uart_RX_available()) {
-                if ((millis() - last_byte_ms) > BYTE_TIMEOUT_MS) {
+                if ((millis() - last_byte_ms) > byte_timeout_ms) {
                     return false;
                 }
                 continue;
@@ -521,7 +594,7 @@ static bool receive_any_frame(FrameType *type, Frame *frame,
 
     while (true) {
         if (!uart_RX_available()) {
-            if ((millis() - last_byte_ms) > BYTE_TIMEOUT_MS) {
+            if ((millis() - last_byte_ms) > byte_timeout_ms) {
                 return false;
             }
             continue;
@@ -588,11 +661,13 @@ static bool receive_any_frame(FrameType *type, Frame *frame,
     frame->encoding_type = h[11];
 
     if (frame->data_length > MAX_DATA_SIZE) {
+        send_nack();
         return false;
     }
 
     const uint16_t expected_len = (uint16_t)(12 + frame->data_length + 2 + 2);
     if (flen != expected_len) {
+        send_nack();
         return false;
     }
 
@@ -605,16 +680,26 @@ static bool receive_any_frame(FrameType *type, Frame *frame,
 
     const uint16_t computed_crc = compute_crc16(frame_buf, (uint16_t)(12 + frame->data_length + 2));
     if (computed_crc != received_crc) {
+        send_nack();
         return false;
     }
 
     if (frame->token != SHARED_TOKEN) {
+        send_nack();
         return false;
     }
 
     frame->crc = received_crc;
 
+    // Auto-reset ALL state if a new sequence (idx=0) arrives while expecting a
+    // different frame. This handles consecutive transactions without explicit
+    // resets — the sender starts a new sequence and the receiver must accept it.
+    if (frame->frame_index == 0 && expected_frame_index != 0) {
+        handle_reset_frame();
+    }
+
     if (!validate_frame_sequence(frame)) {
+        send_nack();
         return false;
     }
 
@@ -662,9 +747,15 @@ static void send_nack(void) {
     uart_send_byte(FRAME_BYTE);
 }
 
-static void process_in_order_frames(uint8_t *output, uint16_t *output_len) {
+static void process_in_order_frames(uint8_t *output, uint16_t *output_len, uint16_t output_max) {
     while (recv_window[0].received && recv_window[0].frame.frame_index == expected_frame_index) {
         Frame *frame = &recv_window[0].frame;
+
+        // Bounds check: ensure we don't overflow the output buffer
+        if (*output_len + frame->data_length > output_max) {
+            break;
+        }
+
         memcpy(&output[*output_len], frame->data, frame->data_length);
         *output_len += frame->data_length;
 
@@ -702,6 +793,14 @@ static bool is_connection_alive(void) {
 }
 
 static void prepare_and_send_frame(const uint8_t *data, uint16_t len, uint8_t flags, uint16_t total_frames, uint32_t total_size, uint8_t encoding_type) {
+    // Guard against accidental oversize frames; emitting a malformed header
+    // will permanently desync the receiver.
+    if (len > MAX_DATA_SIZE) {
+        uart_send_byte(RESET_FRAME);
+        uart_flush_tx();
+        return;
+    }
+
     uint8_t index = next_frame_index % WINDOW_SIZE;
 
     Frame *frame = &send_window[index].frame;
@@ -733,6 +832,27 @@ static void prepare_and_send_frame(const uint8_t *data, uint16_t len, uint8_t fl
 // This constructs a single frame and sends it through the existing sender logic.
 void sliding_window_send_payload(const uint8_t *data, uint16_t len, uint8_t flags, uint8_t encoding_type) {
     // For a single frame, total_frames = 1 and total_size = len
+
+    // Wait for window space: block while the window is full
+    while ( ((next_frame_index - base_frame_index + MAX_FRAME_INDEX) % MAX_FRAME_INDEX) >= WINDOW_SIZE ) {
+         // Poll for ACKs to advance window
+         Frame rx_frame;
+         FrameType ftype;
+         uint8_t ctrl_data[16];
+         uint8_t ctrl_len = 0;
+
+         if (receive_any_frame(&ftype, &rx_frame, ctrl_data, &ctrl_len)) {
+            if (ftype == FRAME_TYPE_ACK && ctrl_len >= 3) {
+                uint16_t sack_base = ((uint16_t)ctrl_data[0] << 8) | ctrl_data[1];
+                uint8_t window_frames = ctrl_data[2];
+                handle_sack_ack(sack_base, window_frames);
+            } else if (ftype == FRAME_TYPE_RESET) {
+                handle_reset_frame();
+            }
+         }
+         check_timeouts_and_retransmit();
+    }
+
     prepare_and_send_frame(data, len, flags, 1, len, encoding_type);
 }
 
@@ -832,6 +952,22 @@ static void check_timeouts_and_retransmit(void) {
                     
                     uart_send_byte(RESET_FRAME);
                 }
+            }
+        }
+    }
+}
+
+// NACK received: immediately retransmit all unacked frames in the window
+static void handle_nack_retransmit(void) {
+    uint32_t now = millis();
+
+    for (int i = 0; i < WINDOW_SIZE; i++) {
+        if (send_window[i].sent && !send_window[i].acked) {
+            if (send_window[i].retransmit_count < MAX_RETRANSMIT_COUNT) {
+                send_frame_struct(&send_window[i].frame);
+                send_window[i].last_sent_time_ms = now;
+                send_window[i].retransmit_count++;
+                conn_state.retransmissions++;
             }
         }
     }

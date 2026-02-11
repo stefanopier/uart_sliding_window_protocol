@@ -138,10 +138,26 @@ SACK bitmap example (WINDOW_SIZE=8): bitmap bit 0 corresponds to `base_seq`, bit
 - `init_sliding_window_protocol()` — resets internal state.
 - `reliable_send_buffered(const uint8_t *data, uint16_t total_len)` — block until all payload sent and acked.
 - `reliable_send_buffered_with_encoding(...)` — like above with an encoding type param.
-- `reliable_receive_buffered(uint8_t *output, volatile uint16_t *output_len)` — accumulate frames into `output` until `FLAG_LAST_FRAME` is seen.
+- `reliable_receive_buffered(uint8_t *output, volatile uint16_t *output_len, uint16_t output_max)` — accumulate frames into `output` until `FLAG_LAST_FRAME` is seen. `output_max` bounds-checks the buffer to prevent overflow.
 - `receive_decoded_frame(...)` — non-blocking helper to decode a single incoming frame and return its payload.
 - `get_connection_statistics(ConnectionState *stats)` — retrieve counters used for debugging/telemetry.
 - `reset_connection_statistics()` — zero out statistics.
+- `reset_sliding_window_receiver()` — clear only receiver state (expected frame index and reorder buffer). Use between independent receive transactions.
+- `reset_sliding_window_after_tx(uint32_t timeout_ms)` — drain the TX window (wait for ACKs), then full-reset transport state. Returns `true` if all frames were acked before timeout.
+- `send_error_response(uint8_t error_flag, uint8_t error_code)` — send a single-byte error payload with flags = `error_flag | FLAG_LAST_FRAME`.
+
+### Transaction lifecycle
+
+For multi-request servers or devices handling consecutive sequences:
+
+1. Call `init_sliding_window_protocol()` once at startup.
+2. Receive a request via `reliable_receive_buffered()`.
+3. Send a response via `reliable_send_buffered()` or `sliding_window_send_fragmented()`.
+4. Call `reset_sliding_window_after_tx(CONNECTION_TIMEOUT_MS)` to drain ACKs and prepare for the next transaction.
+5. Call `reset_sliding_window_receiver()` if you need to accept a new inbound sequence starting at idx=0.
+6. Go to step 2.
+
+Without explicit resets, the receiver will auto-reset when `frame_index=0` arrives while expecting a different index. However, explicit resets are recommended for clarity and to ensure sender state is also cleaned up.
 
 Note: The receiver and sender expect the platform to implement these hooks in user code:
 
@@ -149,6 +165,7 @@ Note: The receiver and sender expect the platform to implement these hooks in us
 - `uint8_t uart_receive_byte(void)` — read a byte from RX.
 - `bool uart_RX_available(void)` — non-blocking; returns whether the serial buffer has >=1 byte ready.
 - `uint32_t millis(void)` — millisecond clock for timeout handling.
+- `void uart_flush_tx(void)` — (optional) block until all queued TX bytes have been physically transmitted. Default weak implementation is a no-op.
 
 ---
 

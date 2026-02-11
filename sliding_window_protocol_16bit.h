@@ -170,8 +170,9 @@ void reliable_send_buffered_with_encoding(const uint8_t *data, uint16_t total_le
 
 // Reliable Receive
 // make output_len volatile so ISR-managed counters can be passed directly
-void reliable_receive_buffered(uint8_t *output, volatile uint16_t *output_len);
-void reliable_receive_buffered_with_encoding(uint8_t *output, volatile uint16_t *output_len, uint8_t *encoding_type);
+// output_max: size in bytes of the output buffer (bounds-checked by process_in_order_frames)
+void reliable_receive_buffered(uint8_t *output, volatile uint16_t *output_len, uint16_t output_max);
+void reliable_receive_buffered_with_encoding(uint8_t *output, volatile uint16_t *output_len, uint16_t output_max, uint8_t *encoding_type);
 
 // Public helper: try to get a decoded payload (nonblocking). Returns true when a payload was produced.
 bool receive_decoded_frame(uint8_t *out, uint16_t *out_len);
@@ -179,6 +180,25 @@ bool receive_decoded_frame(uint8_t *out, uint16_t *out_len);
 // Diagnostics
 void get_connection_statistics(ConnectionState *stats);
 void reset_connection_statistics(void);
+
+// Reset receiver state (expected frame index and reorder buffer).
+// Use between independent transactions to accept new sequences starting at idx=0.
+// Does not affect sender state — safe to call mid-flight if only the receive
+// side needs to be recycled (e.g., after processing a complete inbound sequence
+// before waiting for the next request).
+void reset_sliding_window_receiver(void);
+
+// Drain TX window (wait for outstanding ACKs) then reset full transport state.
+// Returns true if all in-flight frames were ACKed before timeout.
+// Typical usage: call after sliding_window_send_fragmented() completes to ensure
+// all data reached the peer, then prepare for a new transaction.
+// Lifecycle: init → send/receive → reset_after_tx → next transaction.
+bool reset_sliding_window_after_tx(uint32_t timeout_ms);
+
+// Send a one-byte error response with the given error flag.
+// Convenience wrapper: sends a single frame with flags = (error_flag | FLAG_LAST_FRAME),
+// payload = &error_code (1 byte), encoding = ENCODING_BINARY.
+void send_error_response(uint8_t error_flag, uint8_t error_code);
 
 // Encoding Utilities
 bool is_valid_encoding_type(uint8_t encoding_type);
@@ -198,6 +218,11 @@ uint8_t uart_receive_byte(void);
 bool uart_RX_available(void);
 
 uint32_t millis(void);
+
+// Optional TX flush hook. Platforms may override to block until the UART TX
+// hardware has physically transmitted all queued bytes (e.g., wait for TXC).
+// The default weak implementation is a no-op.
+void uart_flush_tx(void);
 
 // Optional Stardome hook: override to process SIGN payloads on MCU side.
 // Public repo provides a weak default in the .c file.
