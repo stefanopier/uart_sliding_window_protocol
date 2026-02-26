@@ -943,13 +943,34 @@ void sliding_window_send_fragmented(const uint8_t *data, uint32_t len, uint8_t f
 
 SWP_INTERNAL void handle_sack_ack(uint16_t sack_base, uint8_t window_frames) {
     bool valid_ack = false;
+
+    uint16_t base_to_sack = (uint16_t)((sack_base - base_frame_index + MAX_FRAME_INDEX) % MAX_FRAME_INDEX);
+    if (base_to_sack <= WINDOW_SIZE) {
+        for (uint16_t step = 0; step < base_to_sack; step++) {
+            uint16_t frame_index = (uint16_t)((base_frame_index + step) % MAX_FRAME_INDEX);
+            uint8_t slot = (uint8_t)(frame_index % WINDOW_SIZE);
+            if (send_window[slot].sent && send_window[slot].frame.frame_index == frame_index) {
+                if (!send_window[slot].acked) {
+                    send_window[slot].acked = true;
+                    valid_ack = true;
+                }
+            }
+        }
+    }
     
     for (int i = 0; i < WINDOW_SIZE; i++) {
         uint16_t frame_index = (sack_base + i) % MAX_FRAME_INDEX;
-        uint8_t index = frame_index % WINDOW_SIZE;
+        uint16_t rel = (uint16_t)((frame_index - base_frame_index + MAX_FRAME_INDEX) % MAX_FRAME_INDEX);
+        if (rel >= WINDOW_SIZE) {
+            continue;
+        }
+
+        uint8_t index = (uint8_t)(frame_index % WINDOW_SIZE);
 
         if (window_frames & (1 << i)) {
-            if (send_window[index].sent && !send_window[index].acked) {
+            if (send_window[index].sent &&
+                send_window[index].frame.frame_index == frame_index &&
+                !send_window[index].acked) {
                 send_window[index].acked = true;
                 valid_ack = true;
             } else {
