@@ -96,6 +96,12 @@ Flags used in frame `flags` byte (some are project-specific):
 | `FLAG_BOARD_STATUS_DATA` | 0xB0 | Board status response |
 | `FLAG_STARDOME_PROOF_DATA` | 0xB2 | Proof data response |
 
+#### `FLAG_STARDOME_OFF` semantics
+
+- Request payload is ignored by the MCU (empty payload is recommended).
+- Success response is `FLAG_STARDOME_OFF | FLAG_LAST_FRAME` with an empty payload.
+- Failure response is `FLAG_STARDOME_OFF_ERROR | FLAG_LAST_FRAME` with a 1-byte generic reason code.
+
 ### Error response flags
 
 Error responses use a base error flag and a 1-byte payload error code. The error flag is OR’d with `FLAG_LAST_FRAME` when sent. In some internal error paths (e.g., SIGN handler failure), the implementation may send a generic 1-byte error payload with only `FLAG_LAST_FRAME` set (no specific error flag).
