@@ -87,13 +87,12 @@ Flags used in frame `flags` byte (some are project-specific):
 | `FLAG_STARDOME_STATUS` | 0x10 | Status request |
 | `FLAG_STARDOME_DATA` | 0x12 | Data request |
 | `FLAG_STARDOME_TREE` | 0x20 | Merkle tree request |
-| `FLAG_STARDOME_HOST_ID` | 0x40 | Host ID request |
+| `FLAG_STARDOME_ID` | 0x40 | Identity request |
 | `FLAG_STARDOME_LOWMODE` | 0x50 | Low-power mode |
 | `FLAG_STARDOME_HIGHMODE` | 0x70 | High-power mode |
 | `FLAG_STARDOME_OFF` | 0x80 | Power off |
 | `FLAG_STARDOME_STATUS_DATA` | 0x90 | Status data response |
-| `FLAG_BOARD_STATUS` | 0xA0 | Board status request |
-| `FLAG_BOARD_STATUS_DATA` | 0xB0 | Board status response |
+| `FLAG_STARDOME_ID_DATA` | 0xB0 | Identity data response |
 | `FLAG_STARDOME_PROOF_DATA` | 0xB2 | Proof data response |
 
 ### Error response flags
@@ -106,8 +105,7 @@ Error responses use a base error flag and a 1-byte payload error code. The error
 | `FLAG_STARDOME_PROOF_ERROR` | 0xC4 | `FLAG_STARDOME_PROOF` |
 | `FLAG_STARDOME_DATA_ERROR` | 0xC6 | `FLAG_STARDOME_DATA` |
 | `FLAG_STARDOME_STATUS_ERROR` | 0xC8 | `FLAG_STARDOME_STATUS` |
-| `FLAG_BOARD_STATUS_ERROR` | 0xCA | `FLAG_BOARD_STATUS` |
-| `FLAG_STARDOME_HOST_ID_ERROR` | 0xCC | `FLAG_STARDOME_HOST_ID` |
+| `FLAG_STARDOME_ID_ERROR` | 0xCC | `FLAG_STARDOME_ID` |
 | `FLAG_STARDOME_OFF_ERROR` | 0xCE | `FLAG_STARDOME_OFF` |
 | `FLAG_STARDOME_LOWMODE_ERROR` | 0xD8 | `FLAG_STARDOME_LOWMODE` |
 | `FLAG_STARDOME_HIGHMODE_ERROR` | 0xDA | `FLAG_STARDOME_HIGHMODE` |

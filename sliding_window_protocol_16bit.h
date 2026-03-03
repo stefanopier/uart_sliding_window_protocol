@@ -62,13 +62,12 @@
 #define FLAG_STARDOME_STATUS 0x10       // where the last bit is reserved for last frame = 0x11
 #define FLAG_STARDOME_DATA 0x12         // where the last bit is reserved for last frame = 0x13
 #define FLAG_STARDOME_TREE 0x20         // where the last bit is reserved for last frame = 0x21
-#define FLAG_STARDOME_HOST_ID 0x40      // where the last bit is reserved for last frame = 0x41
+#define FLAG_STARDOME_ID 0x40           // where the last bit is reserved for last frame = 0x41
 #define FLAG_STARDOME_LOWMODE 0x50      // where the last bit is reserved for last frame = 0x51
 #define FLAG_STARDOME_HIGHMODE 0x70     // where the last bit is reserved for last frame = 0x71
 #define FLAG_STARDOME_OFF 0x80          // where the last bit is reserved for last frame = 0x81
 #define FLAG_STARDOME_STATUS_DATA 0x90  // where the last bit is reserved for last frame = 0x91
-#define FLAG_BOARD_STATUS 0xA0          // where the last bit is reserved for last frame = 0xA1
-#define FLAG_BOARD_STATUS_DATA 0xB0     // where the last bit is reserved for last frame = 0xB1
+#define FLAG_STARDOME_ID_DATA 0xB0       // where the last bit is reserved for last frame = 0xB1
 #define FLAG_STARDOME_PROOF_DATA 0xB2   // where the last bit is reserved for last frame = 0xB3
 
 // Error-response flags: payload is a single binary byte error code.
@@ -77,8 +76,7 @@
 #define FLAG_STARDOME_PROOF_ERROR 0xC4       // where the last bit is reserved for last frame = 0xC5
 #define FLAG_STARDOME_DATA_ERROR 0xC6        // where the last bit is reserved for last frame = 0xC7
 #define FLAG_STARDOME_STATUS_ERROR 0xC8      // where the last bit is reserved for last frame = 0xC9
-#define FLAG_BOARD_STATUS_ERROR 0xCA         // where the last bit is reserved for last frame = 0xCB
-#define FLAG_STARDOME_HOST_ID_ERROR 0xCC     // where the last bit is reserved for last frame = 0xCD
+#define FLAG_STARDOME_ID_ERROR 0xCC          // where the last bit is reserved for last frame = 0xCD
 #define FLAG_STARDOME_OFF_ERROR 0xCE         // where the last bit is reserved for last frame = 0xCF
 #define FLAG_STARDOME_LOWMODE_ERROR 0xD8     // where the last bit is reserved for last frame = 0xD9
 #define FLAG_STARDOME_HIGHMODE_ERROR 0xDA    // where the last bit is reserved for last frame = 0xDB
