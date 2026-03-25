@@ -300,24 +300,22 @@ Both the protocol `.c` and the wrapper `.c` must be compiled and linked. The lin
 
 ## Testing locally 🧪
 
-You can use the `test_python_client` folder to exercise the protocol from a PC host. The Python test client will send payloads with different sizes and encodings and verify reception and retransmissions.
+This repository now ships the protocol reference and the Arduino UNO sample only.
 
-Basic run (with Python 3 installed):
+For local bring-up and regression checks:
 
-```powershell
-cd test_python_client
-python -m pip install -r requirements.txt
-python sliding_window_client.py --device COMx --payload payload.json
-```
+- Use the UNO sample under `test_arduino/uno_min_test` to exercise framing, CRC, token validation, retransmissions, and SACK behavior on hardware.
+- Use an external host implementation that matches this README's cumulative-SACK semantics when testing against the public reference.
+- If you maintain a downstream host/client copy of this protocol, keep its sender ACK handling and stale-duplicate receiver behavior aligned with this repository.
 
-Replace `COMx` with your device name. The tests will attempt to connect and verify SACK, CRC, and retransmissions.
+For an end-to-end hardware sanity check, build and upload the UNO sample, then drive it from your host-side client over the board's USB serial port.
 
 ---
 
 ## Contributing & Notes
 
 - The header `sliding_window_protocol_16bit.h` includes extensive documentation, enums, macros and public prototypes; consult that file for precise constants.
-- If you modify wire format or sequence numbering, update `test_python_client` tests accordingly.
+- If you modify wire format or sequence numbering, update downstream host/client implementations accordingly.
 - For constrained platforms: use the UNO test as a reference and ensure that `MAX_DATA_SIZE` and `WINDOW_SIZE` are safe for your memory budget.
 
 ---
