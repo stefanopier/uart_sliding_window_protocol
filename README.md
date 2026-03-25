@@ -87,14 +87,19 @@ Flags used in frame `flags` byte (some are project-specific):
 | `FLAG_STARDOME_STATUS` | 0x10 | Status request |
 | `FLAG_STARDOME_DATA` | 0x12 | Data request |
 | `FLAG_STARDOME_TREE` | 0x20 | Merkle tree request |
-| `FLAG_STARDOME_HOST_ID` | 0x40 | Host ID request |
+| `FLAG_STARDOME_ID` | 0x40 | Identity request |
 | `FLAG_STARDOME_LOWMODE` | 0x50 | Low-power mode |
 | `FLAG_STARDOME_HIGHMODE` | 0x70 | High-power mode |
 | `FLAG_STARDOME_OFF` | 0x80 | Power off |
 | `FLAG_STARDOME_STATUS_DATA` | 0x90 | Status data response |
-| `FLAG_BOARD_STATUS` | 0xA0 | Board status request |
-| `FLAG_BOARD_STATUS_DATA` | 0xB0 | Board status response |
+| `FLAG_STARDOME_ID_DATA` | 0xB0 | Identity data response |
 | `FLAG_STARDOME_PROOF_DATA` | 0xB2 | Proof data response |
+
+#### `FLAG_STARDOME_OFF` semantics
+
+- Request payload is ignored by the MCU (empty payload is recommended).
+- Success response is `FLAG_STARDOME_OFF | FLAG_LAST_FRAME` with an empty payload.
+- Failure response is `FLAG_STARDOME_OFF_ERROR | FLAG_LAST_FRAME` with a 1-byte generic reason code.
 
 ### Error response flags
 
@@ -106,8 +111,7 @@ Error responses use a base error flag and a 1-byte payload error code. The error
 | `FLAG_STARDOME_PROOF_ERROR` | 0xC4 | `FLAG_STARDOME_PROOF` |
 | `FLAG_STARDOME_DATA_ERROR` | 0xC6 | `FLAG_STARDOME_DATA` |
 | `FLAG_STARDOME_STATUS_ERROR` | 0xC8 | `FLAG_STARDOME_STATUS` |
-| `FLAG_BOARD_STATUS_ERROR` | 0xCA | `FLAG_BOARD_STATUS` |
-| `FLAG_STARDOME_HOST_ID_ERROR` | 0xCC | `FLAG_STARDOME_HOST_ID` |
+| `FLAG_STARDOME_ID_ERROR` | 0xCC | `FLAG_STARDOME_ID` |
 | `FLAG_STARDOME_OFF_ERROR` | 0xCE | `FLAG_STARDOME_OFF` |
 | `FLAG_STARDOME_LOWMODE_ERROR` | 0xD8 | `FLAG_STARDOME_LOWMODE` |
 | `FLAG_STARDOME_HIGHMODE_ERROR` | 0xDA | `FLAG_STARDOME_HIGHMODE` |
@@ -122,7 +126,12 @@ Flags that do not have a dedicated error flag in the MCU implementation should b
 - NACK: simple NACK frame (no body in this implementation); senders can trigger retransmit policy.
 - RESET: a control frame instructing both sides to reset sequence numbers and state.
 
-SACK bitmap example (WINDOW_SIZE=8): bitmap bit 0 corresponds to `base_seq`, bit1 to `base_seq+1`, …
+SACK semantics in the public reference:
+
+- Frames strictly before `sack_base` are acknowledged cumulatively.
+- Bitmap bit 0 corresponds to `sack_base`, bit 1 to `sack_base + 1`, and so on.
+- Receivers should emit `sack_base = expected_frame_index`, meaning all lower indices were already consumed in order.
+- If a stale duplicate arrives from behind the current receive base but still within the recently acknowledged window, the receiver should answer with a fresh SACK instead of a NACK so the sender can retire already-delivered frames.
 
 ---
 
@@ -291,24 +300,22 @@ Both the protocol `.c` and the wrapper `.c` must be compiled and linked. The lin
 
 ## Testing locally 🧪
 
-You can use the `test_python_client` folder to exercise the protocol from a PC host. The Python test client will send payloads with different sizes and encodings and verify reception and retransmissions.
+This repository now ships the protocol reference and the Arduino UNO sample only.
 
-Basic run (with Python 3 installed):
+For local bring-up and regression checks:
 
-```powershell
-cd test_python_client
-python -m pip install -r requirements.txt
-python sliding_window_client.py --device COMx --payload payload.json
-```
+- Use the UNO sample under `test_arduino/uno_min_test` to exercise framing, CRC, token validation, retransmissions, and SACK behavior on hardware.
+- Use an external host implementation that matches this README's cumulative-SACK semantics when testing against the public reference.
+- If you maintain a downstream host/client copy of this protocol, keep its sender ACK handling and stale-duplicate receiver behavior aligned with this repository.
 
-Replace `COMx` with your device name. The tests will attempt to connect and verify SACK, CRC, and retransmissions.
+For an end-to-end hardware sanity check, build and upload the UNO sample, then drive it from your host-side client over the board's USB serial port.
 
 ---
 
 ## Contributing & Notes
 
 - The header `sliding_window_protocol_16bit.h` includes extensive documentation, enums, macros and public prototypes; consult that file for precise constants.
-- If you modify wire format or sequence numbering, update `test_python_client` tests accordingly.
+- If you modify wire format or sequence numbering, update downstream host/client implementations accordingly.
 - For constrained platforms: use the UNO test as a reference and ensure that `MAX_DATA_SIZE` and `WINDOW_SIZE` are safe for your memory budget.
 
 ---

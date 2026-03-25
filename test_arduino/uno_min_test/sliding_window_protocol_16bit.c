@@ -58,6 +58,7 @@ static void handle_sack_ack(uint16_t sack_base, uint8_t window_frames);
 static void check_timeouts_and_retransmit(void);
 static void handle_reset_frame(void);
 static bool validate_frame_sequence(Frame *frame);
+static bool is_recently_acked_duplicate(uint16_t frame_index, uint16_t expected_frame_index);
 
 // #############################################################################
 // ## Public Function Implementations
@@ -436,6 +437,10 @@ static bool receive_any_frame(FrameType *type, Frame *frame, uint8_t *ctrl_data,
     }
     frame->crc = received_crc;
     if (!validate_frame_sequence(frame)) {
+        if (is_recently_acked_duplicate(frame->frame_index, expected_frame_index)) {
+            send_sack_ack();
+            return false;
+        }
         swp_debug_pulse(10); // sequence validation failure
         return false;
     }
@@ -592,6 +597,11 @@ static void handle_reset_frame(void) {
     for (int i = 0; i < WINDOW_SIZE; i++) recv_window[i].received = false;
     conn_state.resets_received++;
     conn_state.connection_active = false;
+}
+
+static bool is_recently_acked_duplicate(uint16_t frame_index, uint16_t expected_frame_index) {
+    uint16_t behind = (uint16_t)((expected_frame_index - frame_index + MAX_FRAME_INDEX) % MAX_FRAME_INDEX);
+    return (behind > 0u) && (behind <= WINDOW_SIZE);
 }
 
 static bool validate_frame_sequence(Frame *frame) {

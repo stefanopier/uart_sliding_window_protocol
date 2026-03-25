@@ -113,6 +113,7 @@ SWP_INTERNAL void check_timeouts_and_retransmit(void);
 SWP_INTERNAL void handle_nack_retransmit(void);
 SWP_INTERNAL void handle_reset_frame(void);
 static bool validate_frame_sequence(Frame *frame);
+static bool is_recently_acked_duplicate(uint16_t frame_index, uint16_t expected_frame_index);
 
 #ifdef SWP_PLATFORM_EXTENSIONS
 // Weak hook defaults — override in platform wrappers (e.g. swp_tyvak_wrapper.c)
@@ -734,6 +735,11 @@ SWP_INTERNAL bool receive_any_frame_timed(FrameType *type, Frame *frame,
     }
 
     if (!validate_frame_sequence(frame)) {
+        if (is_recently_acked_duplicate(frame->frame_index, expected_frame_index)) {
+            send_sack_ack();
+            return false;
+        }
+
         send_nack();
         return false;
     }
@@ -943,13 +949,34 @@ void sliding_window_send_fragmented(const uint8_t *data, uint32_t len, uint8_t f
 
 SWP_INTERNAL void handle_sack_ack(uint16_t sack_base, uint8_t window_frames) {
     bool valid_ack = false;
+
+    uint16_t base_to_sack = (uint16_t)((sack_base - base_frame_index + MAX_FRAME_INDEX) % MAX_FRAME_INDEX);
+    if (base_to_sack <= WINDOW_SIZE) {
+        for (uint16_t step = 0; step < base_to_sack; step++) {
+            uint16_t frame_index = (uint16_t)((base_frame_index + step) % MAX_FRAME_INDEX);
+            uint8_t slot = (uint8_t)(frame_index % WINDOW_SIZE);
+            if (send_window[slot].sent && send_window[slot].frame.frame_index == frame_index) {
+                if (!send_window[slot].acked) {
+                    send_window[slot].acked = true;
+                    valid_ack = true;
+                }
+            }
+        }
+    }
     
     for (int i = 0; i < WINDOW_SIZE; i++) {
         uint16_t frame_index = (sack_base + i) % MAX_FRAME_INDEX;
-        uint8_t index = frame_index % WINDOW_SIZE;
+        uint16_t rel = (uint16_t)((frame_index - base_frame_index + MAX_FRAME_INDEX) % MAX_FRAME_INDEX);
+        if (rel >= WINDOW_SIZE) {
+            continue;
+        }
+
+        uint8_t index = (uint8_t)(frame_index % WINDOW_SIZE);
 
         if (window_frames & (1 << i)) {
-            if (send_window[index].sent && !send_window[index].acked) {
+            if (send_window[index].sent &&
+                send_window[index].frame.frame_index == frame_index &&
+                !send_window[index].acked) {
                 send_window[index].acked = true;
                 valid_ack = true;
             } else {
@@ -1031,6 +1058,11 @@ SWP_INTERNAL void handle_reset_frame(void) {
 #ifdef SWP_PLATFORM_EXTENSIONS
     swp_hook_on_reset();
 #endif
+}
+
+static bool is_recently_acked_duplicate(uint16_t frame_index, uint16_t expected_frame_index) {
+    uint16_t behind = (uint16_t)((expected_frame_index - frame_index + MAX_FRAME_INDEX) % MAX_FRAME_INDEX);
+    return (behind > 0u) && (behind <= WINDOW_SIZE);
 }
 
 static bool validate_frame_sequence(Frame *frame) {

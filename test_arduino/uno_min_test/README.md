@@ -32,7 +32,8 @@ python sliding_window_client.py --port COMx --baud 115200 \
 Replace `COMx` with your serial port (e.g., `COM5` on Windows or `/dev/ttyACM0` on Linux).
 
 ## Expected behavior
-- The UNO receives the message, sends SACK ACKs during receipt, validates CRC-16 and token, then blinks the LED twice upon full message assembly.
+- The UNO receives the message, sends SACK ACKs during receipt, validates CRC-16 and token, and re-sends its current SACK state if it sees a recently acknowledged duplicate.
+- Once the full message is assembled, it blinks the LED twice.
 - It then echoes the payload back to the host using the same encoding.
 
 ### LED diagnostics
