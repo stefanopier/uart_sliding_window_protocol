@@ -113,6 +113,7 @@ SWP_INTERNAL void check_timeouts_and_retransmit(void);
 SWP_INTERNAL void handle_nack_retransmit(void);
 SWP_INTERNAL void handle_reset_frame(void);
 static bool validate_frame_sequence(Frame *frame);
+static bool is_recently_acked_duplicate(uint16_t frame_index, uint16_t expected_frame_index);
 
 #ifdef SWP_PLATFORM_EXTENSIONS
 // Weak hook defaults — override in platform wrappers (e.g. swp_tyvak_wrapper.c)
@@ -734,6 +735,11 @@ SWP_INTERNAL bool receive_any_frame_timed(FrameType *type, Frame *frame,
     }
 
     if (!validate_frame_sequence(frame)) {
+        if (is_recently_acked_duplicate(frame->frame_index, expected_frame_index)) {
+            send_sack_ack();
+            return false;
+        }
+
         send_nack();
         return false;
     }
@@ -1052,6 +1058,11 @@ SWP_INTERNAL void handle_reset_frame(void) {
 #ifdef SWP_PLATFORM_EXTENSIONS
     swp_hook_on_reset();
 #endif
+}
+
+static bool is_recently_acked_duplicate(uint16_t frame_index, uint16_t expected_frame_index) {
+    uint16_t behind = (uint16_t)((expected_frame_index - frame_index + MAX_FRAME_INDEX) % MAX_FRAME_INDEX);
+    return (behind > 0u) && (behind <= WINDOW_SIZE);
 }
 
 static bool validate_frame_sequence(Frame *frame) {

@@ -126,7 +126,12 @@ Flags that do not have a dedicated error flag in the MCU implementation should b
 - NACK: simple NACK frame (no body in this implementation); senders can trigger retransmit policy.
 - RESET: a control frame instructing both sides to reset sequence numbers and state.
 
-SACK bitmap example (WINDOW_SIZE=8): bitmap bit 0 corresponds to `base_seq`, bit1 to `base_seq+1`, …
+SACK semantics in the public reference:
+
+- Frames strictly before `sack_base` are acknowledged cumulatively.
+- Bitmap bit 0 corresponds to `sack_base`, bit 1 to `sack_base + 1`, and so on.
+- Receivers should emit `sack_base = expected_frame_index`, meaning all lower indices were already consumed in order.
+- If a stale duplicate arrives from behind the current receive base but still within the recently acknowledged window, the receiver should answer with a fresh SACK instead of a NACK so the sender can retire already-delivered frames.
 
 ---
 
