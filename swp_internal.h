@@ -26,6 +26,14 @@ typedef enum {
     FRAME_TYPE_UNKNOWN
 } FrameType;
 
+typedef enum {
+    SWP_RESET_REASON_UNKNOWN = 0,
+    SWP_RESET_REASON_EXPLICIT_FRAME,
+    SWP_RESET_REASON_AUTO_SEQ0,
+    SWP_RESET_REASON_TX_DRAIN,
+    SWP_RESET_REASON_INTERNAL
+} swp_reset_reason_t;
+
 // #############################################################################
 // ## Internal State (defined in sliding_window_protocol_16bit.c)
 // #############################################################################
@@ -85,6 +93,10 @@ void handle_nack_retransmit(void);
 
 // Reset all transport state (send window, recv window, indices)
 void handle_reset_frame(void);
+
+// Set/read the reason associated with the next/current reset.
+void swp_set_pending_reset_reason(swp_reset_reason_t reason);
+swp_reset_reason_t swp_get_last_reset_reason(void);
 
 // Check for timed-out frames and retransmit
 void check_timeouts_and_retransmit(void);

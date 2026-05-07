@@ -78,6 +78,8 @@ SWP_INTERNAL EnhancedSendSlot send_window[WINDOW_SIZE];
 SWP_INTERNAL uint16_t base_frame_index = 0;
 SWP_INTERNAL uint16_t next_frame_index = 0;
 SWP_INTERNAL ConnectionState conn_state = {0};
+SWP_INTERNAL swp_reset_reason_t swp_pending_reset_reason = SWP_RESET_REASON_UNKNOWN;
+SWP_INTERNAL swp_reset_reason_t swp_last_reset_reason = SWP_RESET_REASON_UNKNOWN;
 
 #ifndef SWP_PLATFORM_EXTENSIONS
 typedef enum {
@@ -87,6 +89,14 @@ typedef enum {
     FRAME_TYPE_RESET,
     FRAME_TYPE_UNKNOWN
 } FrameType;
+
+typedef enum {
+    SWP_RESET_REASON_UNKNOWN = 0,
+    SWP_RESET_REASON_EXPLICIT_FRAME,
+    SWP_RESET_REASON_AUTO_SEQ0,
+    SWP_RESET_REASON_TX_DRAIN,
+    SWP_RESET_REASON_INTERNAL
+} swp_reset_reason_t;
 #endif
 
 // #############################################################################
@@ -112,6 +122,8 @@ SWP_INTERNAL void handle_sack_ack(uint16_t sack_base, uint8_t window_frames);
 SWP_INTERNAL void check_timeouts_and_retransmit(void);
 SWP_INTERNAL void handle_nack_retransmit(void);
 SWP_INTERNAL void handle_reset_frame(void);
+SWP_INTERNAL void swp_set_pending_reset_reason(swp_reset_reason_t reason);
+SWP_INTERNAL swp_reset_reason_t swp_get_last_reset_reason(void);
 static bool validate_frame_sequence(Frame *frame);
 static bool is_recently_acked_duplicate(uint16_t frame_index, uint16_t expected_frame_index);
 
@@ -184,6 +196,7 @@ void reliable_send_buffered_with_encoding(const uint8_t *data, uint16_t total_le
                 // Immediately retransmit all unacked frames
                 handle_nack_retransmit();
             } else if (ftype == FRAME_TYPE_RESET) {
+                swp_set_pending_reset_reason(SWP_RESET_REASON_EXPLICIT_FRAME);
                 handle_reset_frame();
             }
         }
@@ -191,6 +204,7 @@ void reliable_send_buffered_with_encoding(const uint8_t *data, uint16_t total_le
         check_timeouts_and_retransmit();
         
         if (!is_connection_alive()) {
+            swp_set_pending_reset_reason(SWP_RESET_REASON_INTERNAL);
             handle_reset_frame();
         }
     }
@@ -272,6 +286,7 @@ void reliable_receive_buffered_with_encoding(uint8_t *output, volatile uint16_t 
             // Retransmit unacked frames on NACK (if we are also sending)
             handle_nack_retransmit();
         } else if (ftype == FRAME_TYPE_RESET) {
+            swp_set_pending_reset_reason(SWP_RESET_REASON_EXPLICIT_FRAME);
             handle_reset_frame();
         }
     }
@@ -345,6 +360,7 @@ bool reset_sliding_window_after_tx(uint32_t timeout_ms) {
             } else if (ftype == FRAME_TYPE_NACK) {
                 handle_nack_retransmit();
             } else if (ftype == FRAME_TYPE_RESET) {
+                swp_set_pending_reset_reason(SWP_RESET_REASON_EXPLICIT_FRAME);
                 handle_reset_frame();
                 break;
             }
@@ -358,6 +374,7 @@ bool reset_sliding_window_after_tx(uint32_t timeout_ms) {
     }
 
     drained = (base_frame_index == next_frame_index);
+    swp_set_pending_reset_reason(SWP_RESET_REASON_TX_DRAIN);
     handle_reset_frame();
     return drained;
 }
@@ -731,6 +748,7 @@ SWP_INTERNAL bool receive_any_frame_timed(FrameType *type, Frame *frame,
     // different frame. This handles consecutive transactions without explicit
     // resets — the sender starts a new sequence and the receiver must accept it.
     if (frame->frame_index == 0 && expected_frame_index != 0) {
+        swp_set_pending_reset_reason(SWP_RESET_REASON_AUTO_SEQ0);
         handle_reset_frame();
     }
 
@@ -891,6 +909,7 @@ void sliding_window_send_payload(const uint8_t *data, uint16_t len, uint8_t flag
                 uint8_t window_frames = ctrl_data[2];
                 handle_sack_ack(sack_base, window_frames);
             } else if (ftype == FRAME_TYPE_RESET) {
+                swp_set_pending_reset_reason(SWP_RESET_REASON_EXPLICIT_FRAME);
                 handle_reset_frame();
             }
          }
@@ -923,6 +942,7 @@ void sliding_window_send_fragmented(const uint8_t *data, uint32_t len, uint8_t f
                     uint8_t window_frames = ctrl_data[2];
                     handle_sack_ack(sack_base, window_frames);
                 } else if (ftype == FRAME_TYPE_RESET) {
+                    swp_set_pending_reset_reason(SWP_RESET_REASON_EXPLICIT_FRAME);
                     handle_reset_frame();
                     // If reset, we probably should abort, but for now we just continue 
                     // (next_frame_index/base_frame_index reset to 0, so loop condition will clear)
@@ -1038,7 +1058,18 @@ SWP_INTERNAL void handle_nack_retransmit(void) {
     }
 }
 
+SWP_INTERNAL void swp_set_pending_reset_reason(swp_reset_reason_t reason) {
+    swp_pending_reset_reason = reason;
+}
+
+SWP_INTERNAL swp_reset_reason_t swp_get_last_reset_reason(void) {
+    return swp_last_reset_reason;
+}
+
 SWP_INTERNAL void handle_reset_frame(void) {
+    swp_last_reset_reason = swp_pending_reset_reason;
+    swp_pending_reset_reason = SWP_RESET_REASON_UNKNOWN;
+
     for (int i = 0; i < WINDOW_SIZE; i++) {
         send_window[i].sent = false;
         send_window[i].acked = false;
